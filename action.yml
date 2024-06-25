@@ -1,5 +1,5 @@
-name: 'Upload Android Release to Play Store'
-description: "An action to upload a signed Android release (.apk or .aab) to the Google Play Store Developer Console and distribute one time"
+name: 'keelim android support'
+description: "An action to upload apk, aab with keelim android support"
 author: 'keelim'
 branding:
   icon: 'settings'
