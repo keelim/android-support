@@ -5,6 +5,9 @@ branding:
   icon: 'settings'
   color: 'green'
 inputs:
+  type:
+    description: "sign or upload"
+    required: true
   serviceAccountJson:
     description: "The service account json private key file to authorize the upload request"
     required: false

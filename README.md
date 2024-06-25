@@ -1,14 +1,15 @@
-# Upload Android release to the Play Store 
+# Upload Android release to the Play Store
 
 (forked from https://github.com/r0adkll/upload-google-play)
-이 action은 Google Play Developer API v3를 사용하여 Android `.apk` 또는 `.aab` (Android App Bundle) 
-파일을 Google Play Console에 업로드하는 데 도움을 드립니다.
 
+이 action은 Google Play Developer API v3를 사용하여 Android `.apk` 또는 `.aab` (Android App Bundle)
+파일을 Google Play Console에 업로드하는 데 도움을 드립니다. (optional sign)
 
 ## Inputs
 
 | Input                       | Description                                                                                                                                                                                                                                           | Value                                                                                                                                                                                 | Required                              |
 |-----------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------|
+| type                        | sign or upload                                                                                                                                                                                                                                        | `sign`, `upload`                                                                                                                                                                      | true                                  |
 | releaseFiles                | The Android release file(s) to upload (.apk or .aab)                                                                                                                                                                                                  | Comma-separated paths. Supports glob via [fast-glob](https://github.com/mrmlnc/fast-glob)                                                                                             | true                                  |
 | serviceAccountJsonPlainText | The service account json in plain text, provided via a secret, etc                                                                                                                                                                                    | The contents of your `service-account.json`                                                                                                                                           | true (or serviceAccountJson)          |
 | packageName                 | The package name, or Application Id, of the app you are uploading                                                                                                                                                                                     | A valid package name, e.g. `com.example.myapp`. The packageName must already exist in the play console account, so make sure you upload a manual apk or aab first through the console | true                                  |
