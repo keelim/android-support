@@ -16,7 +16,7 @@ inputs:
     required: false
   packageName:
     description: "The package name, or Application Id, of the app you are uploading"
-    required: true
+    required: false
   releaseFile:
     description: "The Android release file to upload (.apk or .aab)"
     required: false
@@ -29,7 +29,7 @@ inputs:
   track:
     description: "The track in which you want to assign the uploaded app."
     default: 'production'
-    required: true
+    required: false
   inAppUpdatePriority:
     description: "In-app update priority of the release. All newly added APKs in the release will be considered at this priority. Can take values in the range [0, 5], with 5 the highest priority. Defaults to 0."
     default: '0'
@@ -39,7 +39,7 @@ inputs:
     required: false
   status:
     description: "Release status. This can be set to 'draft' to complete the release at some other time."
-    required: true
+    required: false
     default: "completed"
   whatsNewDirectory:
     description: "The directory of localized whats new files"
@@ -57,9 +57,56 @@ inputs:
   existingEditId:
     description: "The ID of an existing edit that has not been completed. If this is supplied, the action will append information to that rather than creating an edit"
     required: false
+  releaseDirectory:
+    description: 'The directory to find your release to sign'
+    required: false
+  signingKeyBase64:
+    description: 'The key used to sign your release in base64 encoded format'
+    required: false
+  alias:
+    description: 'The key alias'
+    required: false
+  keyStorePassword:
+    description: 'The password to the keystore'
+    required: false
+  keyPassword:
+    description: 'The password for the key'
+    required: false
 outputs:
   internalSharingDownloadUrl:
     description: "The internal app sharing download url if track was 'internalsharing'"
+  signedReleaseFile:
+    description: 'The signed release APK or AAB file, if single'
+  signedReleaseFiles:
+    description: 'The signed release APK or AAB files'
+  nofSignedReleaseFiles:
+    description: 'The number of signed release files'
+  signedReleaseFile0:
+    description: 'The Oth signed release APK or AAB file'
+  signedReleaseFile1:
+    description: 'The 1st signed release APK or AAB file'
+  signedReleaseFile2:
+    description: 'The 2nd signed release APK or AAB file'
+  signedReleaseFile3:
+    description: 'The 3rd signed release APK or AAB file'
+  signedReleaseFile4:
+    description: 'The 4th signed release APK or AAB file'
+  signedReleaseFile5:
+    description: 'The 5th signed release APK or AAB file'
+  signedReleaseFile6:
+    description: 'The 6th signed release APK or AAB file'
+  signedReleaseFile7:
+    description: 'The 7th signed release APK or AAB file'
+  signedReleaseFile8:
+    description: 'The 8th signed release APK or AAB file'
+  signedReleaseFile9:
+    description: 'The 9th signed release APK or AAB file'
+  signedReleaseFile10:
+    description: 'The 10th signed release APK or AAB file'
+  signedReleaseFile11:
+    description: 'The 11th signed release APK or AAB file'
+  signedReleaseFile12:
+    description: 'The 12th signed release APK or AAB file'
 runs:
   using: 'node20'
   main: 'lib/index.js'
