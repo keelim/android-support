@@ -92,3 +92,10 @@ typings/
 
 # DynamoDB Local files
 .dynamodb/
+/src/edits.js
+/src/input-validation.js
+/__tests__/input-validation.test.js
+/src/main.js
+/__tests__/main.test.js
+/src/whatsnew.js
+/__tests__/whatsnew.test.js
