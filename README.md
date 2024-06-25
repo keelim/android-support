@@ -1,5 +1,6 @@
-# Upload Android release to the Play Store (forked from https://github.com/r0adkll/upload-google-play)
+# Upload Android release to the Play Store 
 
+(forked from https://github.com/r0adkll/upload-google-play)
 이 action은 Google Play Developer API v3를 사용하여 Android `.apk` 또는 `.aab` (Android App Bundle) 
 파일을 Google Play Console에 업로드하는 데 도움을 드립니다.
 
