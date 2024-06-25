@@ -1,9 +1,9 @@
 name: 'Upload Android Release to Play Store'
-description: "An action to upload a signed Android release (.apk or .aab) to the Google Play Store Developer Console"
-author: 'r0adkll'
+description: "An action to upload a signed Android release (.apk or .aab) to the Google Play Store Developer Console and distribute one time"
+author: 'keelim'
 branding:
-  icon: 'truck'
-  color: 'orange'
+  icon: 'settings'
+  color: 'green'
 inputs:
   serviceAccountJson:
     description: "The service account json private key file to authorize the upload request"
