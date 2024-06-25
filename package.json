@@ -1,6 +1,6 @@
 {
-  "name": "upload-google-play",
-  "version": "1.1.3",
+  "name": "support-google-play-in-android",
+  "version": "0.0.1",
   "private": true,
   "description": "Upload an Android release (.apk or .aab) to Google Play Console",
   "main": "lib/index.js",
@@ -10,14 +10,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/r0adkll/upload-google-play.git"
+    "url": "git+https://github.com/keelim/upload-google-play.git"
   },
   "keywords": [
     "actions",
     "node",
-    "setup"
   ],
-  "author": "r0adkll",
+  "author": "keelim",
   "license": "MIT",
   "dependencies": {
     "@actions/core": "^1.10.1",
