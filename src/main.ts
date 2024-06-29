@@ -4,7 +4,7 @@ import { runUpload } from "./edits"
 import { validateInAppUpdatePriority, validateReleaseFiles, validateStatus, validateUserFraction } from "./input-validation"
 import { unlink, writeFile } from 'fs/promises'
 import pTimeout from 'p-timeout'
-import * as io from "./io-utils";
+import * as io from "./utils/io-utils";
 import path from "path";
 import {signAabFile, signApkFile} from "./signing";
 
