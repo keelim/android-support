@@ -1,20 +1,20 @@
 import * as core from '@actions/core';
 import * as fs from "fs";
-import { readFileSync, lstatSync } from "fs";
+import {lstatSync, readFileSync} from "fs";
 import JSZip from 'jszip';
-import path = require('path');
-import { Readable } from 'stream';
+import {Readable} from 'stream';
 
 import * as google from '@googleapis/androidpublisher';
-import { androidpublisher_v3 } from "@googleapis/androidpublisher";
+import {androidpublisher_v3} from '@googleapis/androidpublisher';
+import {GoogleAuth} from "google-auth-library/build/src/auth/googleauth"
+import {readLocalizedReleaseNotes} from "./whatsnew";
+import path = require('path');
 
 import AndroidPublisher = androidpublisher_v3.Androidpublisher;
 import Apk = androidpublisher_v3.Schema$Apk;
 import Bundle = androidpublisher_v3.Schema$Bundle;
 import Track = androidpublisher_v3.Schema$Track;
 import InternalAppSharingArtifact = androidpublisher_v3.Schema$InternalAppSharingArtifact;
-import { GoogleAuth } from "google-auth-library/build/src/auth/googleauth"
-import { readLocalizedReleaseNotes } from "./whatsnew";
 
 const androidPublisher: AndroidPublisher = google.androidpublisher('v3');
 
@@ -73,7 +73,7 @@ export async function runUpload(
 
 async function uploadToPlayStore(options: EditOptions, releaseFiles: string[]): Promise<string | void> {
     const internalSharingDownloadUrls: string[] = []
-    
+
     // Check the 'track' for 'internalsharing', if so switch to a non-track api
     if (options.track === 'internalsharing') {
         core.debug("Track is Internal app sharing, switch to special upload api")
@@ -96,7 +96,7 @@ async function uploadToPlayStore(options: EditOptions, releaseFiles: string[]): 
         for (const versionCode of versionCodes) {
             const url = inferInternalSharingDownloadUrl(options.applicationId, versionCode);
             core.setOutput("internalSharingDownloadUrl", url);
-            core.exportVariable("INTERNAL_SHARING_DOWNLOAD_URL", url);      
+            core.exportVariable("INTERNAL_SHARING_DOWNLOAD_URL", url);
             internalSharingDownloadUrls.push(url);
         }
 
@@ -123,7 +123,7 @@ async function uploadToPlayStore(options: EditOptions, releaseFiles: string[]): 
     }
 
     core.setOutput("internalSharingDownloadUrls", internalSharingDownloadUrls);
-    core.exportVariable("INTERNAL_SHARING_DOWNLOAD_URLS", internalSharingDownloadUrls);    
+    core.exportVariable("INTERNAL_SHARING_DOWNLOAD_URLS", internalSharingDownloadUrls);
 }
 
 async function uploadInternalSharingRelease(options: EditOptions, releaseFile: string): Promise<string> {
@@ -135,7 +135,7 @@ async function uploadInternalSharingRelease(options: EditOptions, releaseFile: s
     } else {
         throw Error(`${releaseFile} is invalid (missing or invalid file extension).`)
     }
-    
+
     if (!res.downloadUrl) throw Error('Uploaded file has no download URL.')
     core.setOutput("internalSharingDownloadUrl", res.downloadUrl);
     core.exportVariable("INTERNAL_SHARING_DOWNLOAD_URL", res.downloadUrl);
@@ -165,7 +165,9 @@ async function validateSelectedTrack(appEditId: string, options: EditOptions): P
 
     // Check whether the track is valid
     if (allTracks.find(value => value.track == options.track) == undefined) {
-        const allTrackNames = allTracks.map((track) => { return track.track });
+        const allTrackNames = allTracks.map((track) => {
+            return track.track
+        });
         throw Error(`Track "${options.track}" could not be found. Available tracks are: ${allTrackNames.toString()}`);
     }
 }
@@ -257,32 +259,32 @@ async function uploadDebugSymbolsFile(appEditId: string, versionCode: number, op
 }
 
 async function zipFileAddDirectory(root: JSZip | null, dirPath: string, rootPath: string, isRootRoot: boolean) {
-	if (root == null) return root;
+    if (root == null) return root;
 
-	const newRootPath = path.join(rootPath, dirPath);
-	const fileStat = lstatSync(newRootPath);
+    const newRootPath = path.join(rootPath, dirPath);
+    const fileStat = lstatSync(newRootPath);
 
-	if (!fileStat.isDirectory()) {
-		const data = readFileSync(newRootPath);
-		root.file(dirPath, data);
-		return root;
-	}
+    if (!fileStat.isDirectory()) {
+        const data = readFileSync(newRootPath);
+        root.file(dirPath, data);
+        return root;
+    }
 
-	const dir = fs.readdirSync(newRootPath);
-	const zipFolder = isRootRoot ? root : root.folder(dirPath);
-	for (let pathIndex = 0; pathIndex < dir.length; pathIndex++) {
-		const underPath = dir[pathIndex];
-		await zipFileAddDirectory(zipFolder, underPath, newRootPath, false);
-	}
+    const dir = fs.readdirSync(newRootPath);
+    const zipFolder = isRootRoot ? root : root.folder(dirPath);
+    for (let pathIndex = 0; pathIndex < dir.length; pathIndex++) {
+        const underPath = dir[pathIndex];
+        await zipFileAddDirectory(zipFolder, underPath, newRootPath, false);
+    }
 
-	return root;
+    return root;
 }
 
 async function createDebugSymbolZipFile(debugSymbolsPath: string) {
     const zipFile = JSZip();
     await zipFileAddDirectory(zipFile, ".", debugSymbolsPath, true);
 
-    return zipFile.generateAsync({ type: "nodebuffer" });
+    return zipFile.generateAsync({type: "nodebuffer"});
 }
 
 async function internalSharingUploadApk(options: EditOptions, apkReleaseFile: string): Promise<InternalAppSharingArtifact> {
@@ -407,8 +409,8 @@ async function uploadReleaseFiles(appEditId: string, options: EditOptions, relea
 }
 
 function inferInternalSharingDownloadUrl(
-  applicationId: string,
-  versionCode: number
+    applicationId: string,
+    versionCode: number
 ) {
-  return `https://play.google.com/apps/test/${applicationId}/${versionCode}`;
+    return `https://play.google.com/apps/test/${applicationId}/${versionCode}`;
 }

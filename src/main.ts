@@ -1,8 +1,13 @@
 import * as core from '@actions/core'
 import * as fs from "fs"
-import { runUpload } from "./edits"
-import { validateInAppUpdatePriority, validateReleaseFiles, validateStatus, validateUserFraction } from "./input-validation"
-import { unlink, writeFile } from 'fs/promises'
+import {runUpload} from "./edits"
+import {
+    validateInAppUpdatePriority,
+    validateReleaseFiles,
+    validateStatus,
+    validateUserFraction
+} from "./input-validation"
+import {unlink, writeFile} from 'fs/promises'
 import pTimeout from 'p-timeout'
 import * as io from "./utils/io-utils";
 import path from "path";
@@ -10,8 +15,8 @@ import {signAabFile, signApkFile} from "./signing";
 
 export async function run() {
     try {
-        const type = core.getInput('type', { required: true });
-        if(type === 'upload') {
+        const type = core.getInput('type', {required: true});
+        if (type === 'upload') {
             await uploadRun();
         } else if (type === 'sign') {
             await signRun();
@@ -25,7 +30,7 @@ export async function run() {
             core.setFailed('Unknown error occurred.')
         }
     } finally {
-        if (core.getInput('serviceAccountJsonPlainText', { required: false})) {
+        if (core.getInput('serviceAccountJsonPlainText', {required: false})) {
             // Cleanup our auth file that we created.
             core.debug('Cleaning up service account json file');
             await unlink('./serviceAccountJson.json');
@@ -35,22 +40,22 @@ export async function run() {
 
 export async function uploadRun() {
     try {
-        const serviceAccountJson = core.getInput('serviceAccountJson', { required: false });
-        const serviceAccountJsonRaw = core.getInput('serviceAccountJsonPlainText', { required: false});
-        const packageName = core.getInput('packageName', { required: true });
-        const releaseFile = core.getInput('releaseFile', { required: false });
-        const releaseFiles = core.getInput('releaseFiles', { required: false })
+        const serviceAccountJson = core.getInput('serviceAccountJson', {required: false});
+        const serviceAccountJsonRaw = core.getInput('serviceAccountJsonPlainText', {required: false});
+        const packageName = core.getInput('packageName', {required: true});
+        const releaseFile = core.getInput('releaseFile', {required: false});
+        const releaseFiles = core.getInput('releaseFiles', {required: false})
             ?.split(',')
             ?.filter(x => x !== '');
-        const releaseName = core.getInput('releaseName', { required: false });
-        const track = core.getInput('track', { required: true });
-        const inAppUpdatePriority = core.getInput('inAppUpdatePriority', { required: false });
-        const userFraction = core.getInput('userFraction', { required: false })
-        const status = core.getInput('status', { required: false });
-        const whatsNewDir = core.getInput('whatsNewDirectory', { required: false });
-        const mappingFile = core.getInput('mappingFile', { required: false });
-        const debugSymbols = core.getInput('debugSymbols', { required: false });
-        const changesNotSentForReview = core.getInput('changesNotSentForReview', { required: false }) == 'true';
+        const releaseName = core.getInput('releaseName', {required: false});
+        const track = core.getInput('track', {required: true});
+        const inAppUpdatePriority = core.getInput('inAppUpdatePriority', {required: false});
+        const userFraction = core.getInput('userFraction', {required: false})
+        const status = core.getInput('status', {required: false});
+        const whatsNewDir = core.getInput('whatsNewDirectory', {required: false});
+        const mappingFile = core.getInput('mappingFile', {required: false});
+        const debugSymbols = core.getInput('debugSymbols', {required: false});
+        const changesNotSentForReview = core.getInput('changesNotSentForReview', {required: false}) == 'true';
         const existingEditId = core.getInput('existingEditId');
 
         await validateServiceAccountJson(serviceAccountJsonRaw, serviceAccountJson)
@@ -120,7 +125,7 @@ export async function uploadRun() {
             core.setFailed('Unknown error occurred.')
         }
     } finally {
-        if (core.getInput('serviceAccountJsonPlainText', { required: false})) {
+        if (core.getInput('serviceAccountJsonPlainText', {required: false})) {
             // Cleanup our auth file that we created.
             core.debug('Cleaning up service account json file');
             await unlink('./serviceAccountJson.json');
@@ -173,7 +178,7 @@ async function signRun() {
             fs.writeFileSync(signingKey, signingKeyBase64, 'base64');
 
             // 4. Now zipalign and sign each one of the the release files
-            const signedReleaseFiles:string[] = [];
+            const signedReleaseFiles: string[] = [];
             let index = 0;
             for (const releaseFile of releaseFiles) {
                 core.debug(`Found release to sign: ${releaseFile.name}`);

@@ -1,4 +1,4 @@
-import { exec } from '@actions/exec';
+import {exec} from '@actions/exec';
 import * as core from '@actions/core';
 import * as io from '@actions/io';
 import * as path from "path";

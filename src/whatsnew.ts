@@ -2,8 +2,8 @@ import * as core from '@actions/core';
 import * as fs from "fs";
 import * as path from "path";
 import {androidpublisher_v3} from "@googleapis/androidpublisher";
+import {readFile} from 'fs/promises';
 import LocalizedText = androidpublisher_v3.Schema$LocalizedText;
-import { readFile } from 'fs/promises';
 
 export async function readLocalizedReleaseNotes(whatsNewDir: string | undefined): Promise<LocalizedText[] | undefined> {
     core.debug(`Executing readLocalizedReleaseNotes`);
