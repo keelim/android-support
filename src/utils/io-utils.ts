@@ -1,14 +1,14 @@
-import fs, {Dirent} from "fs";
+import fs, { Dirent } from 'fs';
 
 export function findReleaseFiles(releaseDir: string): Dirent[] | undefined {
-    const releaseFiles = fs.readdirSync(releaseDir, {withFileTypes: true})
-        .filter(item => !item.isDirectory())
-        .filter(item => item.name.endsWith(".apk") || item.name.endsWith(".aab"));
+  const releaseFiles = fs.readdirSync(releaseDir, { withFileTypes: true })
+    .filter(item => !item.isDirectory())
+    .filter(item => item.name.endsWith('.apk') || item.name.endsWith('.aab'));
 
-    console.log("Found " + releaseFiles.length + " release files.")
+  console.log('Found ' + releaseFiles.length + ' release files.');
 
-    if (releaseFiles.length > 0) {
-        return releaseFiles
-    }
+  if (releaseFiles.length > 0) {
+    return releaseFiles;
+  }
 }
 
