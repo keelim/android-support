@@ -1,8 +1,8 @@
 import {exec} from '@actions/exec';
-import * as core from '@actions/core';
 import * as io from '@actions/io';
 import * as path from "path";
 import * as fs from "fs";
+import * as logger from "./utils/logger";
 
 
 export async function signApkFile(
@@ -13,18 +13,18 @@ export async function signApkFile(
     keyPassword?: string
 ): Promise<string> {
 
-    core.debug("Zipaligning APK file");
+    logger.d("Zipaligning APK file");
 
     // Find zipalign executable
     const buildToolsVersion = process.env.BUILD_TOOLS_VERSION || '33.0.0';
     const androidHome = process.env.ANDROID_HOME;
     const buildTools = path.join(androidHome!, `build-tools/${buildToolsVersion}`);
     if (!fs.existsSync(buildTools)) {
-        core.error(`Couldnt find the Android build tools @ ${buildTools}`)
+        logger.e(`Couldnt find the Android build tools @ ${buildTools}`)
     }
 
     const zipAlign = path.join(buildTools, 'zipalign');
-    core.debug(`Found 'zipalign' @ ${zipAlign}`);
+    logger.d(`Found 'zipalign' @ ${zipAlign}`);
 
     // Align the apk file
     const alignedApkFile = apkFile.replace('.apk', '-aligned.apk');
@@ -40,11 +40,11 @@ export async function signApkFile(
         alignedApkFile
     ]);
 
-    core.debug("Signing APK file");
+    logger.d("Signing APK file");
 
     // find apksigner path
     const apkSigner = path.join(buildTools, 'apksigner');
-    core.debug(`Found 'apksigner' @ ${apkSigner}`);
+    logger.d(`Found 'apksigner' @ ${apkSigner}`);
 
     // apksigner sign --ks my-release-key.jks --out my-app-release.apk my-app-unsigned-aligned.apk
     const signedApkFile = apkFile.replace('.apk', '-signed.apk');
@@ -64,7 +64,7 @@ export async function signApkFile(
     await exec(`"${apkSigner}"`, args);
 
     // Verify
-    core.debug("Verifying Signed APK");
+    logger.d("Verifying Signed APK");
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     await exec(`"${apkSigner}"`, [
         'verify',
@@ -81,10 +81,10 @@ export async function signAabFile(
     keyStorePassword: string,
     keyPassword?: string,
 ): Promise<string> {
-    core.debug("Signing AAB file");
+    logger.d("Signing AAB file");
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment,@typescript-eslint/no-unsafe-call,@typescript-eslint/no-unsafe-member-access
     const jarSignerPath = await io.which('jarsigner', true);
-    core.debug(`Found 'jarsigner' @ ${jarSignerPath}`);
+    logger.d(`Found 'jarsigner' @ ${jarSignerPath}`);
     const args = [
         '-keystore', signingKeyFile,
         '-storepass', keyStorePassword,

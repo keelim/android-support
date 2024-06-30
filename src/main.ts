@@ -12,6 +12,7 @@ import pTimeout from 'p-timeout'
 import * as io from "./utils/io-utils";
 import path from "path";
 import {signAabFile, signApkFile} from "./signing";
+import * as logger from "./utils/logger";
 
 export async function run() {
     try {
@@ -32,7 +33,7 @@ export async function run() {
     } finally {
         if (core.getInput('serviceAccountJsonPlainText', {required: false})) {
             // Cleanup our auth file that we created.
-            core.debug('Cleaning up service account json file');
+            logger.d('Cleaning up service account json file');
             await unlink('./serviceAccountJson.json');
         }
     }
@@ -83,20 +84,20 @@ export async function uploadRun() {
 
         // Check release files while maintaining backward compatibility
         if (releaseFile) {
-            core.warning(`WARNING!! 'releaseFile' is deprecated and will be removed in a future release. Please migrate to 'releaseFiles'`)
+            logger.w(`WARNING!! 'releaseFile' is deprecated and will be removed in a future release. Please migrate to 'releaseFiles'`)
         }
         const validatedReleaseFiles: string[] = await validateReleaseFiles(releaseFiles ?? [releaseFile])
 
         if (whatsNewDir != undefined && whatsNewDir.length > 0 && !fs.existsSync(whatsNewDir)) {
-            core.warning(`Unable to find 'whatsnew' directory @ ${whatsNewDir}`);
+            logger.w(`Unable to find 'whatsnew' directory @ ${whatsNewDir}`);
         }
 
         if (mappingFile != undefined && mappingFile.length > 0 && !fs.existsSync(mappingFile)) {
-            core.warning(`Unable to find 'mappingFile' @ ${mappingFile}`);
+            logger.w(`Unable to find 'mappingFile' @ ${mappingFile}`);
         }
 
         if (debugSymbols != undefined && debugSymbols.length > 0 && !fs.existsSync(debugSymbols)) {
-            core.warning(`Unable to find 'debugSymbols' @ ${debugSymbols}`);
+            logger.w(`Unable to find 'debugSymbols' @ ${debugSymbols}`);
         }
 
         await pTimeout(
@@ -127,7 +128,7 @@ export async function uploadRun() {
     } finally {
         if (core.getInput('serviceAccountJsonPlainText', {required: false})) {
             // Cleanup our auth file that we created.
-            core.debug('Cleaning up service account json file');
+            logger.d('Cleaning up service account json file');
             await unlink('./serviceAccountJson.json');
         }
     }
@@ -136,7 +137,7 @@ export async function uploadRun() {
 async function validateServiceAccountJson(serviceAccountJsonRaw: string | undefined, serviceAccountJson: string | undefined): Promise<string | undefined> {
     if (serviceAccountJson && serviceAccountJsonRaw) {
         // If the user provided both, print a warning one will be ignored
-        core.warning('Both \'serviceAccountJsonPlainText\' and \'serviceAccountJson\' were provided! \'serviceAccountJson\' will be ignored.')
+        logger.w('Both \'serviceAccountJsonPlainText\' and \'serviceAccountJson\' were provided! \'serviceAccountJson\' will be ignored.')
     }
 
     if (serviceAccountJsonRaw) {
@@ -158,7 +159,7 @@ async function validateServiceAccountJson(serviceAccountJsonRaw: string | undefi
 async function signRun() {
     try {
         if (process.env.DEBUG_ACTION === 'true') {
-            core.debug("DEBUG FLAG DETECTED, SHORTCUTTING ACTION.")
+            logger.d("DEBUG FLAG DETECTED, SHORTCUTTING ACTION.")
             return;
         }
 
@@ -181,7 +182,7 @@ async function signRun() {
             const signedReleaseFiles: string[] = [];
             let index = 0;
             for (const releaseFile of releaseFiles) {
-                core.debug(`Found release to sign: ${releaseFile.name}`);
+                logger.d(`Found release to sign: ${releaseFile.name}`);
                 const releaseFilePath = path.join(releaseDir, releaseFile.name);
                 let signedReleaseFile = '';
                 if (releaseFile.name.endsWith('.apk')) {
@@ -189,7 +190,7 @@ async function signRun() {
                 } else if (releaseFile.name.endsWith('.aab')) {
                     signedReleaseFile = await signAabFile(releaseFilePath, signingKey, alias, keyStorePassword, keyPassword);
                 } else {
-                    core.error('No valid release file to sign, abort.');
+                    logger.e('No valid release file to sign, abort.');
                     core.setFailed('No valid release file to sign.');
                 }
 
@@ -213,7 +214,7 @@ async function signRun() {
             }
             console.log('Releases signed!');
         } else {
-            core.error("No release files (.apk or .aab) could be found. Abort.");
+            logger.e("No release files (.apk or .aab) could be found. Abort.");
             core.setFailed('No release files (.apk or .aab) could be found.');
         }
     } catch (error) {
