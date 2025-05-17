@@ -31,9 +31,25 @@ jobs:
 
       - name: Update version
         run: |
-          bun run version ${{ github.event.inputs.build_type }} --no-git-tag-version
-          VERSION=$(bun run -e "console.log(require('./package.json').version)")
-          echo "NEW_VERSION=$VERSION" >> $GITHUB_ENV
+          CURRENT_VERSION=$(bun run -e "console.log(require('./package.json').version)")
+          IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
+          case "${{ github.event.inputs.build_type }}" in
+            "major")
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            "minor")
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            "patch")
+              patch=$((patch + 1))
+              ;;
+          esac
+          NEW_VERSION="$major.$minor.$patch"
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          bun run -e "const pkg = require('./package.json'); pkg.version = '$NEW_VERSION'; require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');"
 
       - name: Build
         run: bun run build
