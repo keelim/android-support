@@ -63,6 +63,21 @@ jobs:
           tag: 'v${{ env.NEW_VERSION }}'
           force_push_tag: true
 
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release v${{ env.NEW_VERSION }}
+          body: |
+            ## 변경사항
+            - 버전 업데이트: ${{ env.NEW_VERSION }}
+            - lib/index.js 빌드 완료
+          draft: false
+          prerelease: false
+          files: |
+            lib/index.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v5
         with:
@@ -74,6 +89,7 @@ jobs:
             - 버전 업데이트: ${{ env.NEW_VERSION }}
             - lib/index.js 빌드 완료
             - git tag v${{ env.NEW_VERSION }} 생성
+            - GitHub Release v${{ env.NEW_VERSION }} 생성
           branch: version-bump
           base: main
           labels: |
