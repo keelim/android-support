@@ -1,0 +1,58 @@
+name: Manual Build and Version Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  build-and-update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Update version
+        run: |
+          bun run version ${{ github.event.inputs.build_type }} --no-git-tag-version
+          VERSION=$(bun run -e "console.log(require('./package.json').version)")
+          echo "NEW_VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Build
+        run: bun run build
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: 'chore: bump version to ${{ env.NEW_VERSION }}'
+          title: 'chore: bump version to ${{ env.NEW_VERSION }}'
+          body: |
+            자동으로 생성된 PR입니다.
+            - 버전 업데이트: ${{ env.NEW_VERSION }}
+            - lib/index.js 빌드 완료
+          branch: version-bump-${{ env.NEW_VERSION }}
+          base: main
+          labels: |
+            automated pr
+            version bump
+          add-paths: |
+            package.json
+            lib/index.js
