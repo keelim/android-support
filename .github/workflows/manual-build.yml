@@ -29,7 +29,8 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Update version
+      - name: Calculate new version
+        id: version
         run: |
           CURRENT_VERSION=$(bun run -e "console.log(require('./package.json').version)")
           IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
@@ -49,10 +50,19 @@ jobs:
           esac
           NEW_VERSION="$major.$minor.$patch"
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-          bun run -e "const pkg = require('./package.json'); pkg.version = '$NEW_VERSION'; require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');"
+
+      - name: Update package.json version
+        run: |
+          bun run -e "const pkg = require('./package.json'); pkg.version = '${{ env.NEW_VERSION }}'; require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');"
 
       - name: Build
         run: bun run build
+
+      - name: Create git tag
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git tag -a "v${{ env.NEW_VERSION }}" -m "Release version ${{ env.NEW_VERSION }}"
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v5
@@ -64,6 +74,7 @@ jobs:
             자동으로 생성된 PR입니다.
             - 버전 업데이트: ${{ env.NEW_VERSION }}
             - lib/index.js 빌드 완료
+            - git tag v${{ env.NEW_VERSION }} 생성
           branch: version-bump
           base: main
           labels: |
