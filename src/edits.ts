@@ -1,3 +1,7 @@
+/**
+ * Google Play Console 편집 관련 유틸리티
+ * 앱 업로드, 트랙 관리, 릴리스 관리 등의 기능 제공
+ */
 import * as core from '@actions/core';
 import * as fs from 'fs';
 import { lstatSync, readFileSync } from 'fs';
@@ -19,21 +23,29 @@ import InternalAppSharingArtifact = androidpublisher_v3.Schema$InternalAppSharin
 
 const androidPublisher: AndroidPublisher = google.androidpublisher('v3');
 
+/**
+ * 편집 옵션 인터페이스
+ * Google Play Console 편집에 필요한 모든 옵션 정의
+ */
 export interface EditOptions {
-  auth: GoogleAuth;
-  applicationId: string;
-  track: string;
-  inAppUpdatePriority: number;
-  userFraction?: number;
-  whatsNewDir?: string;
-  mappingFile?: string;
-  debugSymbols?: string;
-  name?: string;
-  status: string;
-  changesNotSentForReview?: boolean;
-  existingEditId?: string;
+  auth: GoogleAuth; // Google 인증 객체
+  applicationId: string; // 앱 패키지 ID
+  track: string; // 릴리스 트랙
+  inAppUpdatePriority: number; // 인앱 업데이트 우선순위
+  userFraction?: number; // 점진적 출시 비율
+  whatsNewDir?: string; // 릴리스 노트 디렉토리
+  mappingFile?: string; // ProGuard 매핑 파일
+  debugSymbols?: string; // 디버그 심볼 파일
+  name?: string; // 릴리스 이름
+  status: string; // 릴리스 상태
+  changesNotSentForReview?: boolean; // 리뷰 없이 변경사항 적용 여부
+  existingEditId?: string; // 기존 편집 ID
 }
 
+/**
+ * 앱 업로드 실행 함수
+ * Google Play Console에 앱을 업로드하고 릴리스 정보를 설정
+ */
 export async function runUpload(
   packageName: string,
   track: string,
@@ -46,36 +58,43 @@ export async function runUpload(
   changesNotSentForReview: boolean,
   existingEditId: string | undefined,
   status: string,
-  validatedReleaseFiles: string[],
+  validatedReleaseFiles: string[]
 ) {
   const auth = new google.auth.GoogleAuth({
     scopes: ['https://www.googleapis.com/auth/androidpublisher'],
   });
 
-  const result = await uploadToPlayStore({
-    auth: auth,
-    applicationId: packageName,
-    track: track,
-    inAppUpdatePriority: inAppUpdatePriority || 0,
-    userFraction: userFraction,
-    whatsNewDir: whatsNewDir,
-    mappingFile: mappingFile,
-    debugSymbols: debugSymbols,
-    name: name,
-    changesNotSentForReview: changesNotSentForReview,
-    existingEditId: existingEditId,
-    status: status,
-  }, validatedReleaseFiles);
+  const result = await uploadToPlayStore(
+    {
+      auth: auth,
+      applicationId: packageName,
+      track: track,
+      inAppUpdatePriority: inAppUpdatePriority || 0,
+      userFraction: userFraction,
+      whatsNewDir: whatsNewDir,
+      mappingFile: mappingFile,
+      debugSymbols: debugSymbols,
+      name: name,
+      changesNotSentForReview: changesNotSentForReview,
+      existingEditId: existingEditId,
+      status: status,
+    },
+    validatedReleaseFiles
+  );
 
   if (result) {
     console.log(`Finished uploading to the Play Store: ${result}`);
   }
 }
 
+/**
+ * Google Play Store 업로드 함수
+ * 내부 공유 또는 일반 트랙에 따라 적절한 업로드 방식 선택
+ */
 async function uploadToPlayStore(options: EditOptions, releaseFiles: string[]): Promise<string | void> {
   const internalSharingDownloadUrls: string[] = [];
 
-  // Check the 'track' for 'internalsharing', if so switch to a non-track api
+  // 내부 공유 트랙인 경우 특별한 업로드 API 사용
   if (options.track === 'internalsharing') {
     logger.d('Track is Internal app sharing, switch to special upload api');
     for (const releaseFile of releaseFiles) {
@@ -84,16 +103,16 @@ async function uploadToPlayStore(options: EditOptions, releaseFiles: string[]): 
       internalSharingDownloadUrls.push(url);
     }
   } else {
-    // Create a new Edit
+    // 새 편집 생성
     const appEditId = await getOrCreateEdit(options);
 
-    // Validate the given track
+    // 선택된 트랙 검증
     await validateSelectedTrack(appEditId, options);
 
-    // Upload artifacts to Google Play, and store their version codes
+    // Google Play에 아티팩트 업로드 및 버전 코드 저장
     const versionCodes = await uploadReleaseFiles(appEditId, options, releaseFiles);
 
-    // Infer the download URL from the version codes
+    // 버전 코드로부터 다운로드 URL 추론
     for (const versionCode of versionCodes) {
       const url = inferInternalSharingDownloadUrl(options.applicationId, versionCode);
       core.setOutput('internalSharingDownloadUrl', url);
@@ -101,10 +120,10 @@ async function uploadToPlayStore(options: EditOptions, releaseFiles: string[]): 
       internalSharingDownloadUrls.push(url);
     }
 
-    // Add the uploaded artifacts to the Edit track
+    // 업로드된 아티팩트를 트랙에 추가
     await addReleasesToTrack(appEditId, options, versionCodes);
 
-    // Commit the pending Edit
+    // 대기 중인 편집 커밋
     logger.i(`Committing the Edit`);
 
     const res = await androidPublisher.edits.commit({
@@ -114,7 +133,7 @@ async function uploadToPlayStore(options: EditOptions, releaseFiles: string[]): 
       changesNotSentForReview: options.changesNotSentForReview,
     });
 
-    // Simple check to see whether commit was successful
+    // 커밋 성공 여부 확인
     if (res.data.id) {
       logger.i(`Successfully committed ${res.data.id}`);
       return res.data.id;
@@ -128,6 +147,10 @@ async function uploadToPlayStore(options: EditOptions, releaseFiles: string[]): 
   core.exportVariable('INTERNAL_SHARING_DOWNLOAD_URLS', internalSharingDownloadUrls);
 }
 
+/**
+ * 내부 공유 릴리스 업로드
+ * APK 또는 AAB 파일을 내부 공유용으로 업로드
+ */
 async function uploadInternalSharingRelease(options: EditOptions, releaseFile: string): Promise<string> {
   let res: google.androidpublisher_v3.Schema$InternalAppSharingArtifact;
   if (releaseFile.endsWith('.apk')) {
@@ -146,6 +169,10 @@ async function uploadInternalSharingRelease(options: EditOptions, releaseFile: s
   return res.downloadUrl;
 }
 
+/**
+ * 선택된 트랙 검증
+ * 지정된 트랙이 유효한지 확인
+ */
 async function validateSelectedTrack(appEditId: string, options: EditOptions): Promise<void> {
   logger.i(`Validating track '${options.track}'`);
   const res = await androidPublisher.edits.tracks.list({
@@ -154,26 +181,30 @@ async function validateSelectedTrack(appEditId: string, options: EditOptions): P
     packageName: options.applicationId,
   });
 
-  // If we didn't get status 200, i.e. success, propagate the error with valid text
+  // 200 상태 코드가 아닌 경우 오류 전파
   if (res.status != 200) {
     throw Error(res.statusText);
   }
 
   const allTracks = res.data.tracks;
-  // Check whether we actually have any tracks
+  // 트랙이 있는지 확인
   if (!allTracks) {
     throw Error('No tracks found, unable to validate track.');
   }
 
-  // Check whether the track is valid
+  // 트랙이 유효한지 확인
   if (allTracks.find(value => value.track == options.track) == undefined) {
-    const allTrackNames = allTracks.map((track) => {
+    const allTrackNames = allTracks.map(track => {
       return track.track;
     });
     throw Error(`Track "${options.track}" could not be found. Available tracks are: ${allTrackNames.toString()}`);
   }
 }
 
+/**
+ * 트랙에 릴리스 추가
+ * 업로드된 아티팩트를 지정된 트랙에 추가
+ */
 async function addReleasesToTrack(appEditId: string, options: EditOptions, versionCodes: number[]): Promise<Track> {
   const status = options.status;
 
@@ -186,35 +217,40 @@ async function addReleasesToTrack(appEditId: string, options: EditOptions, versi
   logger.d(`status=${status}`);
   logger.d(`versionCodes=${versionCodes.toString()}`);
 
-  const res = await androidPublisher.edits.tracks
-    .update({
-      auth: options.auth,
-      editId: appEditId,
-      packageName: options.applicationId,
+  const res = await androidPublisher.edits.tracks.update({
+    auth: options.auth,
+    editId: appEditId,
+    packageName: options.applicationId,
+    track: options.track,
+    requestBody: {
       track: options.track,
-      requestBody: {
-        track: options.track,
-        releases: [
-          {
-            name: options.name,
-            userFraction: options.userFraction,
-            status: status,
-            inAppUpdatePriority: options.inAppUpdatePriority,
-            releaseNotes: await readLocalizedReleaseNotes(options.whatsNewDir),
-            versionCodes: versionCodes.filter(x => x != 0).map(x => x.toString()),
-          },
-        ],
-      },
-    });
+      releases: [
+        {
+          name: options.name,
+          userFraction: options.userFraction,
+          status: status,
+          inAppUpdatePriority: options.inAppUpdatePriority,
+          releaseNotes: await readLocalizedReleaseNotes(options.whatsNewDir),
+          versionCodes: versionCodes.filter(x => x != 0).map(x => x.toString()),
+        },
+      ],
+    },
+  });
 
   return res.data;
 }
 
+/**
+ * 매핑 파일 업로드
+ * ProGuard 매핑 파일을 Google Play Console에 업로드
+ */
 async function uploadMappingFile(appEditId: string, versionCode: number, options: EditOptions) {
   if (options.mappingFile != undefined && options.mappingFile.length > 0) {
     const mapping = readFileSync(options.mappingFile, 'utf-8');
     if (mapping != undefined) {
-      logger.d(`[${appEditId}, versionCode=${versionCode}, packageName=${options.applicationId}]: Uploading Proguard mapping file @ ${options.mappingFile}`);
+      logger.d(
+        `[${appEditId}, versionCode=${versionCode}, packageName=${options.applicationId}]: Uploading Proguard mapping file @ ${options.mappingFile}`
+      );
       await androidPublisher.edits.deobfuscationfiles.upload({
         auth: options.auth,
         packageName: options.applicationId,
@@ -230,6 +266,10 @@ async function uploadMappingFile(appEditId: string, versionCode: number, options
   }
 }
 
+/**
+ * 디버그 심볼 파일 업로드
+ * 디버그 심볼 파일을 Google Play Console에 업로드
+ */
 async function uploadDebugSymbolsFile(appEditId: string, versionCode: number, options: EditOptions) {
   if (options.debugSymbols != undefined && options.debugSymbols.length > 0) {
     const fileStat = lstatSync(options.debugSymbols);
@@ -244,7 +284,9 @@ async function uploadDebugSymbolsFile(appEditId: string, versionCode: number, op
     }
 
     if (data != null) {
-      logger.d(`[${appEditId}, versionCode=${versionCode}, packageName=${options.applicationId}]: Uploading Debug Symbols file @ ${options.debugSymbols}`);
+      logger.d(
+        `[${appEditId}, versionCode=${versionCode}, packageName=${options.applicationId}]: Uploading Debug Symbols file @ ${options.debugSymbols}`
+      );
       await androidPublisher.edits.deobfuscationfiles.upload({
         auth: options.auth,
         packageName: options.applicationId,
@@ -260,38 +302,39 @@ async function uploadDebugSymbolsFile(appEditId: string, versionCode: number, op
   }
 }
 
+/**
+ * 디렉토리를 ZIP 파일에 추가
+ * 디버그 심볼 디렉토리를 ZIP 파일로 압축
+ */
 async function zipFileAddDirectory(root: JSZip | null, dirPath: string, rootPath: string, isRootRoot: boolean) {
-  if (root == null) return root;
-
-  const newRootPath = path.join(rootPath, dirPath);
-  const fileStat = lstatSync(newRootPath);
-
-  if (!fileStat.isDirectory()) {
-    const data = readFileSync(newRootPath);
-    root.file(dirPath, data);
-    return root;
+  const files = fs.readdirSync(dirPath);
+  for (const file of files) {
+    const filePath = path.join(dirPath, file);
+    const stat = fs.statSync(filePath);
+    if (stat.isDirectory()) {
+      await zipFileAddDirectory(root, filePath, rootPath, false);
+    } else {
+      const relativePath = path.relative(rootPath, filePath);
+      root?.file(relativePath, fs.readFileSync(filePath));
+    }
   }
-
-  const dir = fs.readdirSync(newRootPath);
-  const zipFolder = isRootRoot ? root : root.folder(dirPath);
-  for (let pathIndex = 0; pathIndex < dir.length; pathIndex++) {
-    const underPath = dir[pathIndex];
-    await zipFileAddDirectory(zipFolder, underPath, newRootPath, false);
-  }
-
-  return root;
 }
 
+/**
+ * 디버그 심볼 ZIP 파일 생성
+ * 디버그 심볼 디렉토리를 ZIP 파일로 압축
+ */
 async function createDebugSymbolZipFile(debugSymbolsPath: string) {
-  const zipFile = JSZip();
-  await zipFileAddDirectory(zipFile, '.', debugSymbolsPath, true);
-
-  return zipFile.generateAsync({ type: 'nodebuffer' });
+  const zip = new JSZip();
+  await zipFileAddDirectory(zip, debugSymbolsPath, debugSymbolsPath, true);
+  return await zip.generateAsync({ type: 'nodebuffer' });
 }
 
+/**
+ * 내부 공유 APK 업로드
+ * APK 파일을 내부 공유용으로 업로드
+ */
 async function internalSharingUploadApk(options: EditOptions, apkReleaseFile: string): Promise<InternalAppSharingArtifact> {
-  logger.d(`[packageName=${options.applicationId}]: Uploading Internal Sharing APK @ ${apkReleaseFile}`);
-
   const res = await androidPublisher.internalappsharingartifacts.uploadapk({
     auth: options.auth,
     packageName: options.applicationId,
@@ -300,13 +343,14 @@ async function internalSharingUploadApk(options: EditOptions, apkReleaseFile: st
       body: fs.createReadStream(apkReleaseFile),
     },
   });
-
   return res.data;
 }
 
+/**
+ * 내부 공유 AAB 업로드
+ * AAB 파일을 내부 공유용으로 업로드
+ */
 async function internalSharingUploadBundle(options: EditOptions, bundleReleaseFile: string): Promise<InternalAppSharingArtifact> {
-  logger.d(`[packageName=${options.applicationId}]: Uploading Internal Sharing Bundle @ ${bundleReleaseFile}`);
-
   const res = await androidPublisher.internalappsharingartifacts.uploadbundle({
     auth: options.auth,
     packageName: options.applicationId,
@@ -315,13 +359,14 @@ async function internalSharingUploadBundle(options: EditOptions, bundleReleaseFi
       body: fs.createReadStream(bundleReleaseFile),
     },
   });
-
   return res.data;
 }
 
+/**
+ * APK 업로드
+ * APK 파일을 Google Play Console에 업로드
+ */
 async function uploadApk(appEditId: string, options: EditOptions, apkReleaseFile: string): Promise<Apk> {
-  logger.d(`[${appEditId}, packageName=${options.applicationId}]: Uploading APK @ ${apkReleaseFile}`);
-
   const res = await androidPublisher.edits.apks.upload({
     auth: options.auth,
     packageName: options.applicationId,
@@ -331,12 +376,14 @@ async function uploadApk(appEditId: string, options: EditOptions, apkReleaseFile
       body: fs.createReadStream(apkReleaseFile),
     },
   });
-
   return res.data;
 }
 
+/**
+ * AAB 업로드
+ * AAB 파일을 Google Play Console에 업로드
+ */
 async function uploadBundle(appEditId: string, options: EditOptions, bundleReleaseFile: string): Promise<Bundle> {
-  logger.d(`[${appEditId}, packageName=${options.applicationId}]: Uploading App Bundle @ ${bundleReleaseFile}`);
   const res = await androidPublisher.edits.bundles.upload({
     auth: options.auth,
     packageName: options.applicationId,
@@ -346,73 +393,66 @@ async function uploadBundle(appEditId: string, options: EditOptions, bundleRelea
       body: fs.createReadStream(bundleReleaseFile),
     },
   });
-
   return res.data;
 }
 
+/**
+ * 편집 생성 또는 가져오기
+ * 기존 편집 ID가 있으면 사용, 없으면 새로 생성
+ */
 async function getOrCreateEdit(options: EditOptions): Promise<string> {
-  // If we already have an ID, just return that
   if (options.existingEditId) {
+    logger.d(`Using existing edit: ${options.existingEditId}`);
     return options.existingEditId;
   }
 
-  // Else attempt to create a new edit. This will throw if there is an issue
-  logger.i(`Creating a new Edit for this release`);
-  const insertResult = await androidPublisher.edits.insert({
+  logger.d('Creating a new edit');
+  const res = await androidPublisher.edits.insert({
     auth: options.auth,
     packageName: options.applicationId,
   });
 
-  // If we didn't get status 200, i.e. success, propagate the error with valid text
-  if (insertResult.status != 200) {
-    throw Error(insertResult.statusText);
+  if (res.data.id) {
+    logger.d(`Created edit with id: ${res.data.id}`);
+    return res.data.id;
+  } else {
+    throw Error('Failed to create an edit');
   }
-
-  // If the result was successful but we have no ID, somethign went horribly wrong
-  if (!insertResult.data.id) {
-    throw Error('New edit has no ID, cannot continue.');
-  }
-
-  logger.d(`This new edit expires at ${String(insertResult.data.expiryTimeSeconds)}`);
-  // Return the new edit ID
-  return insertResult.data.id;
 }
 
+/**
+ * 릴리스 파일 업로드
+ * APK/AAB 파일을 Google Play Console에 업로드
+ */
 async function uploadReleaseFiles(appEditId: string, options: EditOptions, releaseFiles: string[]): Promise<number[]> {
   const versionCodes: number[] = [];
-  // Upload all release files
+
   for (const releaseFile of releaseFiles) {
-    logger.i(`Uploading ${releaseFile}`);
-    let versionCode: number;
+    logger.d(`Uploading ${releaseFile}`);
+    let versionCode = 0;
+
     if (releaseFile.endsWith('.apk')) {
-      // Upload APK, or throw when something goes wrong
       const apk = await uploadApk(appEditId, options, releaseFile);
-      if (!apk.versionCode) throw Error('Failed to upload APK.');
-      versionCode = apk.versionCode;
+      versionCode = apk.versionCode || 0;
+      await uploadMappingFile(appEditId, versionCode, options);
+      await uploadDebugSymbolsFile(appEditId, versionCode, options);
     } else if (releaseFile.endsWith('.aab')) {
-      // Upload AAB, or throw when something goes wrong
       const bundle = await uploadBundle(appEditId, options, releaseFile);
-      if (!bundle.versionCode) throw Error('Failed to upload bundle.');
-      versionCode = bundle.versionCode;
+      versionCode = bundle.versionCode || 0;
     } else {
-      // Throw if file extension is not right
-      throw Error(`${releaseFile} is invalid.`);
+      throw Error(`${releaseFile} is invalid (missing or invalid file extension).`);
     }
 
-    // Upload version code
-    await uploadMappingFile(appEditId, versionCode, options);
-    await uploadDebugSymbolsFile(appEditId, versionCode, options);
     versionCodes.push(versionCode);
   }
-
-  logger.i(`Successfully uploaded ${versionCodes.length} artifacts`);
 
   return versionCodes;
 }
 
-function inferInternalSharingDownloadUrl(
-  applicationId: string,
-  versionCode: number,
-) {
+/**
+ * 내부 공유 다운로드 URL 추론
+ * 앱 ID와 버전 코드로부터 내부 공유 다운로드 URL 생성
+ */
+function inferInternalSharingDownloadUrl(applicationId: string, versionCode: number) {
   return `https://play.google.com/apps/test/${applicationId}/${versionCode}`;
 }
