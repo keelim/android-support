@@ -64,7 +64,7 @@ jobs:
             자동으로 생성된 PR입니다.
             - 버전 업데이트: ${{ env.NEW_VERSION }}
             - lib/index.js 빌드 완료
-          branch: version-bump-${{ env.NEW_VERSION }}
+          branch: version-bump
           base: main
           labels: |
             automated pr
