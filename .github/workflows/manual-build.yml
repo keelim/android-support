@@ -58,11 +58,10 @@ jobs:
       - name: Build
         run: bun run build
 
-      - name: Create git tag
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git tag -a "v${{ env.NEW_VERSION }}" -m "Release version ${{ env.NEW_VERSION }}"
+      - uses: rickstaa/action-create-tag@v1
+        with:
+          tag: 'v${{ env.NEW_VERSION }}'
+          force_push_tag: true
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v5
