@@ -32,7 +32,7 @@ jobs:
       - name: Calculate new version
         id: version
         run: |
-          CURRENT_VERSION=$(bun run -e "console.log(require('./package.json').version)")
+          CURRENT_VERSION=$(cat package.json | grep '"version"' | head -1 | awk -F: '{ print $2 }' | sed 's/[",]//g' | tr -d '[[:space:]]')
           IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
           case "${{ github.event.inputs.build_type }}" in
             "major")
