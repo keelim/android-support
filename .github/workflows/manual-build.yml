@@ -67,6 +67,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           name: Release v${{ env.NEW_VERSION }}
+          tag_name: 'v${{ env.NEW_VERSION }}'
           body: |
             ## 변경사항
             - 버전 업데이트: ${{ env.NEW_VERSION }}
