@@ -1,24 +1,24 @@
 name: 'keelim android support'
-description: "An action to upload apk, aab with keelim android support"
+description: 'An action to upload apk, aab with keelim android support'
 author: 'keelim'
 branding:
   icon: 'settings'
   color: 'green'
 inputs:
   type:
-    description: "sign or upload"
+    description: 'sign or upload'
     required: true
   serviceAccountJson:
-    description: "The service account json private key file to authorize the upload request"
+    description: 'The service account json private key file to authorize the upload request'
     required: false
   serviceAccountJsonPlainText:
-    description: "The raw json text of the service account private key to authorize the upload request"
+    description: 'The raw json text of the service account private key to authorize the upload request'
     required: false
   packageName:
-    description: "The package name, or Application Id, of the app you are uploading"
+    description: 'The package name, or Application Id, of the app you are uploading'
     required: false
   releaseFile:
-    description: "The Android release file to upload (.apk or .aab)"
+    description: 'The Android release file to upload (.apk or .aab)'
     required: false
   releaseFiles:
     description: "The Android release file(s) to upload (.apk or .aab). Separated by  a ',' for multiple artifacts. Supports glob"
@@ -27,35 +27,45 @@ inputs:
     description: "The name of this release. If not set it's generated automatically from the APKs versionName"
     required: false
   track:
-    description: "The track in which you want to assign the uploaded app."
+    description: 'The track in which you want to assign the uploaded app.'
     default: 'production'
     required: false
   inAppUpdatePriority:
-    description: "In-app update priority of the release. All newly added APKs in the release will be considered at this priority. Can take values in the range [0, 5], with 5 the highest priority. Defaults to 0."
+    description: 'In-app update priority of the release. All newly added APKs in the release will be considered at this priority. Can take values in the range [0, 5], with 5 the highest priority. Defaults to 0.'
     default: '0'
     required: false
   userFraction:
-    description: "Portion of users who should get the staged version of the app. Accepts values between 0.0 and 1.0 (exclusive-exclusive)."
+    description: 'Portion of users who should get the staged version of the app. Accepts values between 0.0 and 1.0 (exclusive-exclusive).'
     required: false
   status:
     description: "Release status. This can be set to 'draft' to complete the release at some other time."
     required: false
-    default: "completed"
+    default: 'completed'
   whatsNewDirectory:
-    description: "The directory of localized whats new files"
+    description: 'The directory of localized whats new files'
+    required: false
+  releaseNotesSource:
+    description: "Source for release notes. Can be 'git-commits', 'file', or 'none'. If 'git-commits', notes are generated from recent Git commits. If 'file', notes are read from 'releaseNotesPath'. If 'none', no release notes are used."
+    required: false
+    default: 'none'
+  releaseNotesPath:
+    description: "Path to the release notes file, if releaseNotesSource is 'file'."
+    required: false
+  releaseNotes:
+    description: 'Directly provided release notes content. Overrides releaseNotesSource and releaseNotesPath.'
     required: false
   mappingFile:
-    description: "The mapping.txt file used to de-obfuscate your stack traces from crash reports"
+    description: 'The mapping.txt file used to de-obfuscate your stack traces from crash reports'
     required: false
   debugSymbols:
-    description: "The native-debug-symbols.zip file or folder that contains your debug symbols"
+    description: 'The native-debug-symbols.zip file or folder that contains your debug symbols'
     required: false
   changesNotSentForReview:
-    description: "Indicates that the changes in this edit will not be reviewed until they are explicitly sent for review from the Google Play Console"
+    description: 'Indicates that the changes in this edit will not be reviewed until they are explicitly sent for review from the Google Play Console'
     default: 'false'
     required: false
   existingEditId:
-    description: "The ID of an existing edit that has not been completed. If this is supplied, the action will append information to that rather than creating an edit"
+    description: 'The ID of an existing edit that has not been completed. If this is supplied, the action will append information to that rather than creating an edit'
     required: false
   releaseDirectory:
     description: 'The directory to find your release to sign'

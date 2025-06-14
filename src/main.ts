@@ -16,6 +16,9 @@ import * as io from './utils/io-utils';
 import path from 'path';
 import { signAabFile, signApkFile } from './signing';
 import * as logger from './utils/logger';
+import { exec } from '@actions/exec';
+import { androidpublisher_v3 } from '@googleapis/androidpublisher';
+import LocalizedText = androidpublisher_v3.Schema$LocalizedText;
 
 /**
  * 메인 실행 함수
@@ -71,9 +74,42 @@ export async function uploadRun() {
     const debugSymbols = core.getInput('debugSymbols', { required: false });
     const changesNotSentForReview = core.getInput('changesNotSentForReview', { required: false }) == 'true';
     const existingEditId = core.getInput('existingEditId');
+    const releaseNotesSource = core.getInput('releaseNotesSource', { required: false }) || 'none';
+    const releaseNotesPath = core.getInput('releaseNotesPath', { required: false });
+    const releaseNotesContent = core.getInput('releaseNotes', { required: false });
+
+    logger.d('Starting app upload process with the following inputs:');
+    logger.d(`  packageName: ${packageName}`);
+    logger.d(`  track: ${track}`);
+    logger.d(`  releaseFile: ${releaseFile}`);
+    logger.d(`  releaseFiles: ${releaseFiles?.join(', ')}`);
+    logger.d(`  releaseName: ${releaseName}`);
+    logger.d(`  inAppUpdatePriority: ${inAppUpdatePriority}`);
+    logger.d(`  userFraction: ${userFraction}`);
+    logger.d(`  status: ${status}`);
+    logger.d(`  whatsNewDirectory: ${whatsNewDir}`);
+    logger.d(`  mappingFile: ${mappingFile}`);
+    logger.d(`  debugSymbols: ${debugSymbols}`);
+    logger.d(`  changesNotSentForReview: ${changesNotSentForReview}`);
+    logger.d(`  existingEditId: ${existingEditId}`);
+    logger.d(`  releaseNotesSource: ${releaseNotesSource}`);
+    logger.d(`  releaseNotesPath: ${releaseNotesPath}`);
+    logger.d(`  releaseNotesContent (present): ${!!releaseNotesContent}`);
+
+    // 릴리스 노트 가져오기
+    let releaseNotes: LocalizedText[] | undefined;
+    logger.d('Attempting to fetch release notes.');
+    const fetchedReleaseNotes = await getReleaseNotes(releaseNotesSource, releaseNotesPath, releaseNotesContent);
+    if (fetchedReleaseNotes) {
+      logger.d('Release notes fetched successfully.');
+      // 단일 문자열 릴리스 노트를 LocalizedText[] 형식으로 변환 (기본 언어는 en-US)
+      releaseNotes = [{ language: 'en-US', text: fetchedReleaseNotes }];
+    }
 
     // 서비스 계정 JSON 검증
+    logger.d('Validating service account JSON.');
     await validateServiceAccountJson(serviceAccountJsonRaw, serviceAccountJson);
+    logger.d('Service account JSON validated.');
 
     // 사용자 분수 검증
     let userFractionFloat: number | undefined;
@@ -82,10 +118,14 @@ export async function uploadRun() {
     } else {
       userFractionFloat = undefined;
     }
+    logger.d(`Validating user fraction: ${userFractionFloat}`);
     await validateUserFraction(userFractionFloat);
+    logger.d('User fraction validated.');
 
     // 릴리스 상태 검증
+    logger.d(`Validating status: ${status}`);
     await validateStatus(status, userFractionFloat != undefined && !isNaN(userFractionFloat));
+    logger.d('Status validated.');
 
     // 인앱 업데이트 우선순위 검증 (0-5 사이의 숫자)
     let inAppUpdatePriorityInt: number | undefined;
@@ -94,28 +134,41 @@ export async function uploadRun() {
     } else {
       inAppUpdatePriorityInt = undefined;
     }
+    logger.d(`Validating in-app update priority: ${inAppUpdatePriorityInt}`);
     await validateInAppUpdatePriority(inAppUpdatePriorityInt);
+    logger.d('In-app update priority validated.');
 
     // 릴리스 파일 검증 (하위 호환성 유지)
     if (releaseFile) {
       logger.w(`WARNING!! 'releaseFile' is deprecated and will be removed in a future release. Please migrate to 'releaseFiles'`);
     }
+    logger.d(`Validating release files: ${releaseFiles ?? [releaseFile]}`);
     const validatedReleaseFiles: string[] = await validateReleaseFiles(releaseFiles ?? [releaseFile]);
+    logger.d(`Release files validated: ${validatedReleaseFiles.join(', ')}`);
 
     // 추가 파일 존재 여부 확인
+    logger.d('Checking for additional files (whatsNewDir, mappingFile, debugSymbols).');
     if (whatsNewDir != undefined && whatsNewDir.length > 0 && !fs.existsSync(whatsNewDir)) {
       logger.w(`Unable to find 'whatsnew' directory @ ${whatsNewDir}`);
+    } else if (whatsNewDir) {
+      logger.d(`'whatsnew' directory found @ ${whatsNewDir}`);
     }
 
     if (mappingFile != undefined && mappingFile.length > 0 && !fs.existsSync(mappingFile)) {
       logger.w(`Unable to find 'mappingFile' @ ${mappingFile}`);
+    } else if (mappingFile) {
+      logger.d(`'mappingFile' found @ ${mappingFile}`);
     }
 
     if (debugSymbols != undefined && debugSymbols.length > 0 && !fs.existsSync(debugSymbols)) {
       logger.w(`Unable to find 'debugSymbols' @ ${debugSymbols}`);
+    } else if (debugSymbols) {
+      logger.d(`'debugSymbols' found @ ${debugSymbols}`);
     }
+    logger.d('Additional file checks complete.');
 
     // 업로드 실행 (3.6e+6ms = 1시간 타임아웃)
+    logger.d('Initiating app upload.');
     await pTimeout(
       runUpload(
         packageName,
@@ -129,12 +182,14 @@ export async function uploadRun() {
         changesNotSentForReview,
         existingEditId,
         status,
-        validatedReleaseFiles
+        validatedReleaseFiles,
+        releaseNotes
       ),
       {
         milliseconds: 3.6e6,
       }
     );
+    logger.d('App upload process completed successfully.');
   } catch (error: unknown) {
     if (error instanceof Error) {
       core.setFailed(error.message);
@@ -252,6 +307,50 @@ async function signRun() {
     } else {
       core.setFailed('Unknown error occurred.');
     }
+  }
+}
+
+async function getReleaseNotes(source: string, path: string | undefined, content: string | undefined): Promise<string | undefined> {
+  if (content) {
+    logger.d('Using release notes provided directly.');
+    return content;
+  } else if (source === 'file' && path) {
+    logger.d(`Reading release notes from file: ${path}`);
+    try {
+      return await fs.promises.readFile(path, 'utf8');
+    } catch (error) {
+      logger.e(`Failed to read release notes file: ${path}. Error: ${error instanceof Error ? error.message : String(error)}`);
+      core.setFailed(`Failed to read release notes file: ${path}`);
+      return undefined;
+    }
+  } else if (source === 'git-commits') {
+    logger.d('Generating release notes from Git commits.');
+    let output = '';
+    let error = '';
+    try {
+      // Get the last 10 commit messages for now. This can be made more sophisticated later.
+      await exec('git', ['log', '-10', '--pretty=format:%s'], {
+        listeners: {
+          stdout: (data: Buffer) => {
+            output += data.toString();
+          },
+          stderr: (data: Buffer) => {
+            error += data.toString();
+          },
+        },
+      });
+      if (error) {
+        logger.w(`Git command stderr: ${error}`);
+      }
+      return output.trim();
+    } catch (err) {
+      logger.e(`Failed to get git commits: ${err instanceof Error ? err.message : String(err)}`);
+      core.setFailed(`Failed to generate release notes from git commits.`);
+      return undefined;
+    }
+  } else {
+    logger.d('No release notes source specified or invalid source.');
+    return undefined;
   }
 }
 

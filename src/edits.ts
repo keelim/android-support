@@ -20,6 +20,7 @@ import Apk = androidpublisher_v3.Schema$Apk;
 import Bundle = androidpublisher_v3.Schema$Bundle;
 import Track = androidpublisher_v3.Schema$Track;
 import InternalAppSharingArtifact = androidpublisher_v3.Schema$InternalAppSharingArtifact;
+import LocalizedText = androidpublisher_v3.Schema$LocalizedText;
 
 const androidPublisher: AndroidPublisher = google.androidpublisher('v3');
 
@@ -40,6 +41,7 @@ export interface EditOptions {
   status: string; // 릴리스 상태
   changesNotSentForReview?: boolean; // 리뷰 없이 변경사항 적용 여부
   existingEditId?: string; // 기존 편집 ID
+  releaseNotes?: LocalizedText[]; // 릴리스 노트
 }
 
 /**
@@ -58,7 +60,8 @@ export async function runUpload(
   changesNotSentForReview: boolean,
   existingEditId: string | undefined,
   status: string,
-  validatedReleaseFiles: string[]
+  validatedReleaseFiles: string[],
+  releaseNotes: LocalizedText[] | undefined
 ) {
   const auth = new google.auth.GoogleAuth({
     scopes: ['https://www.googleapis.com/auth/androidpublisher'],
@@ -78,6 +81,7 @@ export async function runUpload(
       changesNotSentForReview: changesNotSentForReview,
       existingEditId: existingEditId,
       status: status,
+      releaseNotes: releaseNotes,
     },
     validatedReleaseFiles
   );
@@ -230,7 +234,7 @@ async function addReleasesToTrack(appEditId: string, options: EditOptions, versi
           userFraction: options.userFraction,
           status: status,
           inAppUpdatePriority: options.inAppUpdatePriority,
-          releaseNotes: await readLocalizedReleaseNotes(options.whatsNewDir),
+          releaseNotes: options.releaseNotes ?? (await readLocalizedReleaseNotes(options.whatsNewDir)),
           versionCodes: versionCodes.filter(x => x != 0).map(x => x.toString()),
         },
       ],
