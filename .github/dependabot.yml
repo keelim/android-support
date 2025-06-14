@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: 'bun' # 또는 bun
+    directory: '/' # 프로젝트의 루트 디렉토리
+    schedule:
+      interval: 'daily' # 매일 종속성 업데이트 확인
+    target-branch: 'develop'
+    labels:
+      - 'dependencies'
+      - 'dependabot'
+    commit-message:
+      prefix: 'deps'
+      include: 'scope'
