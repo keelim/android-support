@@ -20,5 +20,14 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Run tests
-        run: bun run test
+      - name: Run tests with coverage
+        run: bun run test:coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage/lcov.info # Jest의 기본 lcov 리포트 경로
+          fail_ci_if_error: true # 커버리지 업로드 실패 시 CI 실패
+          verbose: true # 상세 로깅 활성화
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }} # Codecov 토큰은 GitHub Secrets에 저장해야 합니다.

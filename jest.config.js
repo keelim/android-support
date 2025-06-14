@@ -8,4 +8,6 @@ module.exports = {
     '^.+\\.ts$': 'ts-jest',
   },
   verbose: true,
+  collectCoverage: true,
+  coverageDirectory: 'coverage',
 };
