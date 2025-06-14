@@ -4,7 +4,7 @@ updates:
     directory: '/' # 프로젝트의 루트 디렉토리
     schedule:
       interval: 'daily' # 매일 종속성 업데이트 확인
-    target-branch: 'develop'
+    target-branch: 'main'
     labels:
       - 'dependencies'
       - 'dependabot'
