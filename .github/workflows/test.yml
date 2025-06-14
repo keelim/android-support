@@ -9,6 +9,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write # PR에 댓글을 달 수 있는 권한 부여
 
     steps:
       - name: Checkout repository
