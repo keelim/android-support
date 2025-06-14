@@ -22,10 +22,21 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Run test with jest-junit
+        run: |
+          JEST_JUNIT_CLASSNAME="{filepath}" jest --reporters=jest-junit
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+
       - name: Run tests with coverage
         run: bun run test:coverage
 
       - name: Upload coverage reports to Codecov
+        if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
