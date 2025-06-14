@@ -31,7 +31,7 @@ jobs:
 
       - name: Run test with jest-junit
         run: |
-          JEST_JUNIT_CLASSNAME="{filepath}" jest --reporters=jest-junit
+          JEST_JUNIT_CLASSNAME="{filepath}" bun run jest --reporters=jest-junit
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
