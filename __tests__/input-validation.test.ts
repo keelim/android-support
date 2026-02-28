@@ -19,6 +19,10 @@ test('invalid releaseFiles glob fails validation', async () => {
   await expect(validateReleaseFiles(testValues)).rejects.toThrowError();
 });
 
+test('missing releaseFiles fails validation', async () => {
+  await expect(validateReleaseFiles(undefined)).rejects.toThrowError(`You must provide 'releaseFiles' in your configuration`);
+});
+
 test('valid releaseFiles glob passes validation', async () => {
   const testValues = ['./__tests__/releasefiles/*.aab', `./__tests__/releasefiles/release.aab`];
   await validateReleaseFiles(testValues);

@@ -460,3 +460,21 @@ async function uploadReleaseFiles(appEditId: string, options: EditOptions, relea
 function inferInternalSharingDownloadUrl(applicationId: string, versionCode: number) {
   return `https://play.google.com/apps/test/${applicationId}/${versionCode}`;
 }
+
+export const __testables = {
+  uploadToPlayStore,
+  uploadInternalSharingRelease,
+  validateSelectedTrack,
+  addReleasesToTrack,
+  uploadMappingFile,
+  uploadDebugSymbolsFile,
+  zipFileAddDirectory,
+  createDebugSymbolZipFile,
+  internalSharingUploadApk,
+  internalSharingUploadBundle,
+  uploadApk,
+  uploadBundle,
+  getOrCreateEdit,
+  uploadReleaseFiles,
+  inferInternalSharingDownloadUrl,
+};

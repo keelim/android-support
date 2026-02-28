@@ -354,4 +354,8 @@ async function getReleaseNotes(source: string, path: string | undefined, content
   }
 }
 
-void run();
+export const __testables = {
+  validateServiceAccountJson,
+  signRun,
+  getReleaseNotes,
+};
