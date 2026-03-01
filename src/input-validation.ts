@@ -3,6 +3,7 @@
  * Google Play Console 업로드에 필요한 입력값들의 유효성 검사
  */
 import fg from 'fast-glob';
+import { isNotNil } from 'es-toolkit/predicate';
 
 /**
  * 사용자 분수(userFraction) 검증
@@ -11,7 +12,7 @@ import fg from 'fast-glob';
  * @param userFraction - 검증할 사용자 분수
  */
 export async function validateUserFraction(userFraction: number | undefined): Promise<void> {
-  if (userFraction != undefined) {
+  if (isNotNil(userFraction)) {
     // userFraction이 설정된 경우 기본 검증 수행
     if (isNaN(userFraction)) {
       return Promise.reject(new Error(`'userFraction' must be a number! Got ${userFraction}`));
@@ -61,7 +62,7 @@ export async function validateStatus(status: string | undefined, hasUserFraction
  * @param inAppUpdatePriority - 검증할 인앱 업데이트 우선순위
  */
 export async function validateInAppUpdatePriority(inAppUpdatePriority: number | undefined): Promise<void> {
-  if (inAppUpdatePriority) {
+  if (isNotNil(inAppUpdatePriority)) {
     if (inAppUpdatePriority < 0 || inAppUpdatePriority > 5) {
       return Promise.reject(new Error('inAppUpdatePriority must be between 0 and 5, inclusive-inclusive'));
     }

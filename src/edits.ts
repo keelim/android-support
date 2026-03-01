@@ -14,6 +14,7 @@ import { GoogleAuth } from 'google-auth-library/build/src/auth/googleauth';
 import { readLocalizedReleaseNotes } from './whatsnew';
 import * as logger from './utils/logger';
 import path = require('path');
+import { without } from 'es-toolkit/array';
 
 import AndroidPublisher = androidpublisher_v3.Androidpublisher;
 import Apk = androidpublisher_v3.Schema$Apk;
@@ -235,7 +236,7 @@ async function addReleasesToTrack(appEditId: string, options: EditOptions, versi
           status: status,
           inAppUpdatePriority: options.inAppUpdatePriority,
           releaseNotes: options.releaseNotes ?? (await readLocalizedReleaseNotes(options.whatsNewDir)),
-          versionCodes: versionCodes.filter(x => x != 0).map(x => x.toString()),
+          versionCodes: without(versionCodes, 0).map(x => x.toString()),
         },
       ],
     },

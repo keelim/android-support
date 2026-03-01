@@ -267,6 +267,18 @@ describe('edits module', () => {
 
       expect(readLocalizedReleaseNotes).toHaveBeenCalledWith('./notes');
     });
+
+    test('removes every zero version code before converting to strings', async () => {
+      await __testables.addReleasesToTrack('edit-1', options({ releaseNotes: [{ language: 'en-US', text: 'notes' }] }), [0, 101, 0, 102, 0]);
+
+      expect(mockAndroidPublisher.edits.tracks.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestBody: expect.objectContaining({
+            releases: [expect.objectContaining({ versionCodes: ['101', '102'] })],
+          }),
+        })
+      );
+    });
   });
 
   describe('__testables.uploadMappingFile', () => {

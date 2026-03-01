@@ -18,6 +18,8 @@ import { signAabFile, signApkFile } from './signing';
 import * as logger from './utils/logger';
 import { exec } from '@actions/exec';
 import { androidpublisher_v3 } from '@googleapis/androidpublisher';
+import { compact } from 'es-toolkit/array';
+import { isNotNil } from 'es-toolkit/predicate';
 import LocalizedText = androidpublisher_v3.Schema$LocalizedText;
 
 /**
@@ -60,10 +62,8 @@ export async function uploadRun() {
     const serviceAccountJsonRaw = core.getInput('serviceAccountJsonPlainText', { required: false });
     const packageName = core.getInput('packageName', { required: true });
     const releaseFile = core.getInput('releaseFile', { required: false });
-    const releaseFiles = core
-      .getInput('releaseFiles', { required: false })
-      ?.split(',')
-      ?.filter(x => x !== '');
+    const releaseFilesInput = core.getInput('releaseFiles', { required: false });
+    const releaseFiles = isNotNil(releaseFilesInput) ? compact(releaseFilesInput.split(',').map(value => value.trim())) : undefined;
     const releaseName = core.getInput('releaseName', { required: false });
     const track = core.getInput('track', { required: true });
     const inAppUpdatePriority = core.getInput('inAppUpdatePriority', { required: false });
@@ -124,7 +124,7 @@ export async function uploadRun() {
 
     // 릴리스 상태 검증
     logger.d(`Validating status: ${status}`);
-    await validateStatus(status, userFractionFloat != undefined && !isNaN(userFractionFloat));
+    await validateStatus(status, isNotNil(userFractionFloat) && !isNaN(userFractionFloat));
     logger.d('Status validated.');
 
     // 인앱 업데이트 우선순위 검증 (0-5 사이의 숫자)
@@ -148,19 +148,19 @@ export async function uploadRun() {
 
     // 추가 파일 존재 여부 확인
     logger.d('Checking for additional files (whatsNewDir, mappingFile, debugSymbols).');
-    if (whatsNewDir != undefined && whatsNewDir.length > 0 && !fs.existsSync(whatsNewDir)) {
+    if (isNotNil(whatsNewDir) && whatsNewDir.length > 0 && !fs.existsSync(whatsNewDir)) {
       logger.w(`Unable to find 'whatsnew' directory @ ${whatsNewDir}`);
     } else if (whatsNewDir) {
       logger.d(`'whatsnew' directory found @ ${whatsNewDir}`);
     }
 
-    if (mappingFile != undefined && mappingFile.length > 0 && !fs.existsSync(mappingFile)) {
+    if (isNotNil(mappingFile) && mappingFile.length > 0 && !fs.existsSync(mappingFile)) {
       logger.w(`Unable to find 'mappingFile' @ ${mappingFile}`);
     } else if (mappingFile) {
       logger.d(`'mappingFile' found @ ${mappingFile}`);
     }
 
-    if (debugSymbols != undefined && debugSymbols.length > 0 && !fs.existsSync(debugSymbols)) {
+    if (isNotNil(debugSymbols) && debugSymbols.length > 0 && !fs.existsSync(debugSymbols)) {
       logger.w(`Unable to find 'debugSymbols' @ ${debugSymbols}`);
     } else if (debugSymbols) {
       logger.d(`'debugSymbols' found @ ${debugSymbols}`);

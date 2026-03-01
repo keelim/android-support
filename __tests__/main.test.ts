@@ -263,6 +263,23 @@ describe('main module', () => {
       expect(logger.w).toHaveBeenCalledWith("Unable to find 'debugSymbols' @ ./missing-symbols.zip");
     });
 
+    test('trims and removes empty releaseFiles entries before validation', async () => {
+      setInputs({
+        serviceAccountJson: '/tmp/service-account.json',
+        packageName: 'com.app',
+        releaseFiles: ' ./__tests__/releasefiles/release.aab, ,\t,./__tests__/releasefiles/release.apk,   ',
+        track: 'production',
+        status: 'completed',
+      });
+
+      await uploadRun();
+
+      expect(validateReleaseFiles).toHaveBeenCalledWith([
+        './__tests__/releasefiles/release.aab',
+        './__tests__/releasefiles/release.apk',
+      ]);
+    });
+
     test('handles Error in upload flow', async () => {
       setInputs({
         serviceAccountJsonPlainText: '{}',

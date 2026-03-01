@@ -14,6 +14,10 @@ test('valid in-app update priority passes validation', async () => {
   }
 });
 
+test('zero in-app update priority passes validation explicitly', async () => {
+  await expect(validateInAppUpdatePriority(0)).resolves.toBeUndefined();
+});
+
 test('invalid releaseFiles glob fails validation', async () => {
   const testValues = ['./__tests__/releasefiles/*.null', `./__tests__/releasefiles/nonexistent-release.aab`];
   await expect(validateReleaseFiles(testValues)).rejects.toThrowError();
