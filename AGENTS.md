@@ -59,3 +59,18 @@ bun run test:coverage
 - **Fragile CI Setup:** The `manual-build.yml` workflow uses shell tools (`awk`, `sed`) to manage versions in `package.json`, which is fragile. It also uses an undefined matrix variable (`${{ matrix.bun }}`) for cache keys.
 - **Local Artifacts:** `.idea/` and `coverage/` directories might exist locally but should be gitignored.
 - **Package Name Mismatch:** The repository URL (`upload-google-play`), package name (`support-google-play-in-android`), and local directory (`android-support`) are inconsistent.
+
+## CODEGRAPH SEARCH
+
+When working from the `keelim-maestro` workspace root, use the root dispatcher
+instead of a root aggregate graph:
+
+```bash
+bun run cg -- context android-support "<task>"
+bun run cg -- query android-support <symbol>
+bun run cg -- files android-support --max-depth 2
+```
+
+If an AI starts inside this repo directly, first check `/Users/keelim/Desktop/keelim-maestro`
+for the dispatcher and prefer its child-targeted `--path` calls. Do not initialize
+or rely on a workspace-root `.codegraph/` that mixes child repositories.
