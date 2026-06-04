@@ -82,6 +82,9 @@ inputs:
   keyPassword:
     description: 'The password for the key'
     required: false
+  dryRun:
+    description: 'If "true", run all preflight validations and stop before any Play API call (no upload). Defaults to "false".'
+    required: false
 outputs:
   internalSharingDownloadUrl:
     description: "The internal app sharing download url if track was 'internalsharing'"

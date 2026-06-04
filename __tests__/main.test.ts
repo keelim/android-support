@@ -60,12 +60,7 @@ import * as fs from 'fs';
 import { unlink, writeFile } from 'fs/promises';
 import pTimeout from 'p-timeout';
 import { runUpload as runUploadEdit } from '../src/edits';
-import {
-  validateInAppUpdatePriority,
-  validateReleaseFiles,
-  validateStatus,
-  validateUserFraction,
-} from '../src/input-validation';
+import { validateInAppUpdatePriority, validateReleaseFiles, validateStatus, validateUserFraction } from '../src/input-validation';
 import * as ioUtils from '../src/utils/io-utils';
 import { signAabFile, signApkFile } from '../src/signing';
 import * as logger from '../src/utils/logger';
@@ -86,7 +81,7 @@ describe('main module', () => {
     (fs.existsSync as jest.Mock).mockReturnValue(true);
     (writeFile as jest.Mock).mockResolvedValue(undefined);
     (unlink as jest.Mock).mockResolvedValue(undefined);
-    ((fs.promises.readFile as unknown) as jest.Mock).mockResolvedValue('notes-from-file');
+    (fs.promises.readFile as unknown as jest.Mock).mockResolvedValue('notes-from-file');
     (pTimeout as jest.Mock).mockImplementation(async (promise: Promise<unknown>) => promise);
     (runUploadEdit as jest.Mock).mockResolvedValue(undefined);
     (validateInAppUpdatePriority as jest.Mock).mockResolvedValue(undefined);
@@ -236,10 +231,7 @@ describe('main module', () => {
 
       await uploadRun();
 
-      expect(validateReleaseFiles).toHaveBeenCalledWith([
-        './__tests__/releasefiles/release.aab',
-        './__tests__/releasefiles/release.apk',
-      ]);
+      expect(validateReleaseFiles).toHaveBeenCalledWith(['./__tests__/releasefiles/release.aab', './__tests__/releasefiles/release.apk']);
       expect(validateUserFraction).toHaveBeenCalledWith(undefined);
       expect(validateStatus).toHaveBeenCalledWith('completed', false);
       expect(validateInAppUpdatePriority).toHaveBeenCalledWith(undefined);
@@ -274,10 +266,25 @@ describe('main module', () => {
 
       await uploadRun();
 
-      expect(validateReleaseFiles).toHaveBeenCalledWith([
-        './__tests__/releasefiles/release.aab',
-        './__tests__/releasefiles/release.apk',
-      ]);
+      expect(validateReleaseFiles).toHaveBeenCalledWith(['./__tests__/releasefiles/release.aab', './__tests__/releasefiles/release.apk']);
+    });
+
+    test('dry-run validates inputs but skips the Play API upload', async () => {
+      setInputs({
+        serviceAccountJsonPlainText: '{}',
+        packageName: 'com.app',
+        releaseFiles: './__tests__/releasefiles/release.aab',
+        track: 'production',
+        status: 'completed',
+        dryRun: 'true',
+      });
+
+      await uploadRun();
+
+      expect(validateReleaseFiles).toHaveBeenCalled();
+      expect(validateStatus).toHaveBeenCalledWith('completed', false);
+      expect(runUploadEdit).not.toHaveBeenCalled();
+      expect(core.setOutput).toHaveBeenCalledWith('dryRun', 'true');
     });
 
     test('handles Error in upload flow', async () => {
@@ -369,13 +376,7 @@ describe('main module', () => {
       await __testables.signRun();
 
       expect(fs.writeFileSync).toHaveBeenCalledWith('/releases/signingKey.jks', 'a2V5', 'base64');
-      expect(signApkFile).toHaveBeenCalledWith(
-        '/releases/app.apk',
-        '/releases/signingKey.jks',
-        'alias',
-        'store-pass',
-        'key-pass'
-      );
+      expect(signApkFile).toHaveBeenCalledWith('/releases/app.apk', '/releases/signingKey.jks', 'alias', 'store-pass', 'key-pass');
       expect(core.exportVariable).toHaveBeenCalledWith('SIGNED_RELEASE_FILE_0', '/releases/app-signed.apk');
       expect(core.setOutput).toHaveBeenCalledWith('signedReleaseFile0', '/releases/app-signed.apk');
       expect(core.exportVariable).toHaveBeenCalledWith('SIGNED_RELEASE_FILE', '/releases/app-signed.apk');
@@ -440,36 +441,40 @@ describe('main module', () => {
     });
 
     test('reads release notes from file', async () => {
-      ((fs.promises.readFile as unknown) as jest.Mock).mockResolvedValue('file-based');
+      (fs.promises.readFile as unknown as jest.Mock).mockResolvedValue('file-based');
       await expect(__testables.getReleaseNotes('file', './notes.md', undefined)).resolves.toBe('file-based');
     });
 
     test('handles file read failure', async () => {
-      ((fs.promises.readFile as unknown) as jest.Mock).mockRejectedValue(new Error('no file'));
+      (fs.promises.readFile as unknown as jest.Mock).mockRejectedValue(new Error('no file'));
       await expect(__testables.getReleaseNotes('file', './missing.md', undefined)).resolves.toBeUndefined();
       expect(core.setFailed).toHaveBeenCalledWith('Failed to read release notes file: ./missing.md');
     });
 
     test('handles file read failure with non-Error value', async () => {
-      ((fs.promises.readFile as unknown) as jest.Mock).mockRejectedValue('missing');
+      (fs.promises.readFile as unknown as jest.Mock).mockRejectedValue('missing');
       await expect(__testables.getReleaseNotes('file', './missing.md', undefined)).resolves.toBeUndefined();
       expect(logger.e).toHaveBeenCalledWith('Failed to read release notes file: ./missing.md. Error: missing');
     });
 
     test('generates notes from git commits and logs stderr', async () => {
-      (exec as jest.Mock).mockImplementation(async (_cmd: string, _args: string[], options: { listeners: { stdout: (data: Buffer) => void; stderr: (data: Buffer) => void } }) => {
-        options.listeners.stdout(Buffer.from('feat: a\nfix: b'));
-        options.listeners.stderr(Buffer.from('warning'));
-      });
+      (exec as jest.Mock).mockImplementation(
+        async (_cmd: string, _args: string[], options: { listeners: { stdout: (data: Buffer) => void; stderr: (data: Buffer) => void } }) => {
+          options.listeners.stdout(Buffer.from('feat: a\nfix: b'));
+          options.listeners.stderr(Buffer.from('warning'));
+        }
+      );
 
       await expect(__testables.getReleaseNotes('git-commits', undefined, undefined)).resolves.toBe('feat: a\nfix: b');
       expect(logger.w).toHaveBeenCalledWith('Git command stderr: warning');
     });
 
     test('generates notes from git commits without stderr', async () => {
-      (exec as jest.Mock).mockImplementation(async (_cmd: string, _args: string[], options: { listeners: { stdout: (data: Buffer) => void; stderr: (data: Buffer) => void } }) => {
-        options.listeners.stdout(Buffer.from('feat: clean output'));
-      });
+      (exec as jest.Mock).mockImplementation(
+        async (_cmd: string, _args: string[], options: { listeners: { stdout: (data: Buffer) => void; stderr: (data: Buffer) => void } }) => {
+          options.listeners.stdout(Buffer.from('feat: clean output'));
+        }
+      );
 
       await expect(__testables.getReleaseNotes('git-commits', undefined, undefined)).resolves.toBe('feat: clean output');
     });

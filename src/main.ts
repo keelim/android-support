@@ -77,6 +77,7 @@ export async function uploadRun() {
     const releaseNotesSource = core.getInput('releaseNotesSource', { required: false }) || 'none';
     const releaseNotesPath = core.getInput('releaseNotesPath', { required: false });
     const releaseNotesContent = core.getInput('releaseNotes', { required: false });
+    const dryRun = core.getInput('dryRun', { required: false }) == 'true';
 
     logger.d('Starting app upload process with the following inputs:');
     logger.d(`  packageName: ${packageName}`);
@@ -166,6 +167,13 @@ export async function uploadRun() {
       logger.d(`'debugSymbols' found @ ${debugSymbols}`);
     }
     logger.d('Additional file checks complete.');
+
+    // Dry-run: 위의 모든 검증을 통과한 상태에서 Play API 변경 전에 중단한다 (업로드 없음).
+    if (dryRun) {
+      logger.d('Dry-run mode: preflight validations passed; skipping Play API upload.');
+      core.setOutput('dryRun', 'true');
+      return;
+    }
 
     // 업로드 실행 (3.6e+6ms = 1시간 타임아웃)
     logger.d('Initiating app upload.');
