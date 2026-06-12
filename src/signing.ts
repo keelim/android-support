@@ -33,9 +33,12 @@ export async function signApkFile(
   // zipalign 실행 파일 찾기
   const buildToolsVersion = process.env.BUILD_TOOLS_VERSION || '33.0.0';
   const androidHome = process.env.ANDROID_HOME;
+  if (!androidHome) {
+    throw new Error('ANDROID_HOME must be set to sign APK files.');
+  }
   const buildTools = path.join(androidHome!, `build-tools/${buildToolsVersion}`);
   if (!fs.existsSync(buildTools)) {
-    logger.e(`Couldnt find the Android build tools @ ${buildTools}`);
+    throw new Error(`Couldnt find the Android build tools @ ${buildTools}`);
   }
 
   const zipAlign = path.join(buildTools, 'zipalign');

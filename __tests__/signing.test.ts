@@ -11,12 +11,14 @@ jest.mock('../src/utils/logger', () => ({
   e: jest.fn(),
 }));
 
+const mockExistsSync = jest.fn();
+
 jest.mock('fs', () => ({
   __esModule: true,
   default: {
-    existsSync: jest.fn(),
+    existsSync: mockExistsSync,
   },
-  existsSync: jest.fn(),
+  existsSync: mockExistsSync,
 }));
 
 import { exec } from '@actions/exec';
@@ -73,9 +75,19 @@ describe('signing', () => {
   test('signApkFile logs error when build tools path is missing', async () => {
     (fs.existsSync as jest.Mock).mockReturnValue(false);
 
-    await signApkFile('/tmp/app.apk', '/tmp/key.jks', 'alias', 'storepass');
+    await expect(signApkFile('/tmp/app.apk', '/tmp/key.jks', 'alias', 'storepass')).rejects.toThrow(
+      'Couldnt find the Android build tools @ /android-sdk/build-tools/35.0.0'
+    );
 
-    expect(logger.e).toHaveBeenCalledWith('Couldnt find the Android build tools @ /android-sdk/build-tools/35.0.0');
+    expect(exec).not.toHaveBeenCalled();
+    expect(logger.e).not.toHaveBeenCalled();
+  });
+
+  test('signApkFile fails clearly when ANDROID_HOME is missing', async () => {
+    delete process.env.ANDROID_HOME;
+
+    await expect(signApkFile('/tmp/app.apk', '/tmp/key.jks', 'alias', 'storepass')).rejects.toThrow('ANDROID_HOME must be set to sign APK files.');
+    expect(exec).not.toHaveBeenCalled();
   });
 
   test('signApkFile uses default build tools version when env is missing', async () => {
@@ -102,5 +114,18 @@ describe('signing', () => {
       '/tmp/app2.aab',
       'alias',
     ]);
+  });
+
+  test('signAabFile propagates jarsigner lookup failures', async () => {
+    (io.which as jest.Mock).mockRejectedValueOnce(new Error('jarsigner missing'));
+
+    await expect(signAabFile('/tmp/app.aab', '/tmp/key.jks', 'alias', 'storepass')).rejects.toThrow('jarsigner missing');
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  test('signAabFile propagates jarsigner exec failures', async () => {
+    (exec as jest.Mock).mockRejectedValueOnce(new Error('jarsigner failed'));
+
+    await expect(signAabFile('/tmp/app.aab', '/tmp/key.jks', 'alias', 'storepass')).rejects.toThrow('jarsigner failed');
   });
 });

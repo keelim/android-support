@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - package.json
+      - lib/index.js
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-1.3.14-${{ hashFiles('**/bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-1.3.14-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check action contract drift
+        run: bun run check:contract
+
+      - name: Check workflow release gates
+        run: bun run check:ci-release
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Run tests
+        run: bun run test
+
+      - name: Run tests with coverage
+        run: bun run test:coverage
+
+      - name: Build action bundle
+        run: bun run build
+
+      - name: Verify committed action bundle is fresh
+        run: git diff --exit-code -- lib/index.js
+
+      - name: Read package version
+        run: |
+          NEW_VERSION=$(node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')); if (!/^[0-9]+\\.[0-9]+\\.[0-9]+$/.test(pkg.version)) throw new Error('package.json version must be x.y.z'); process.stdout.write(pkg.version);")
+          echo "NEW_VERSION=$NEW_VERSION" >> "$GITHUB_ENV"
+
+      - name: Check whether package version changed
+        run: |
+          PREVIOUS_VERSION=$(git show HEAD^:package.json | node -e "let input = ''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => process.stdout.write(JSON.parse(input).version));")
+          if [ "$PREVIOUS_VERSION" = "$NEW_VERSION" ]; then
+            echo "Version $NEW_VERSION is unchanged; skipping release creation."
+            echo "SHOULD_RELEASE=false" >> "$GITHUB_ENV"
+          else
+            echo "SHOULD_RELEASE=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Ensure release tag does not exist
+        if: env.SHOULD_RELEASE == 'true'
+        run: |
+          git fetch --tags --force
+          if git rev-parse "v${NEW_VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${NEW_VERSION} already exists; refusing to overwrite it."
+            exit 1
+          fi
+
+      - name: Create release tag
+        if: env.SHOULD_RELEASE == 'true'
+        run: |
+          git tag "v${NEW_VERSION}" "$GITHUB_SHA"
+          git push origin "v${NEW_VERSION}"
+
+      - name: Create GitHub Release
+        if: env.SHOULD_RELEASE == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release v${{ env.NEW_VERSION }}
+          tag_name: v${{ env.NEW_VERSION }}
+          body: |
+            ## 변경사항
+            - 버전 업데이트: ${{ env.NEW_VERSION }}
+            - lib/index.js 빌드 완료
+            - 테스트/커버리지/typecheck/계약 drift 검증 완료
+          draft: false
+          prerelease: false
+          files: |
+            lib/index.js

@@ -55,6 +55,10 @@ jest.mock('@actions/exec', () => ({
   exec: jest.fn(),
 }));
 
+jest.mock('../src/whatsnew', () => ({
+  readLocalizedReleaseNotes: jest.fn(),
+}));
+
 import * as core from '@actions/core';
 import * as fs from 'fs';
 import { unlink, writeFile } from 'fs/promises';
@@ -65,12 +69,13 @@ import * as ioUtils from '../src/utils/io-utils';
 import { signAabFile, signApkFile } from '../src/signing';
 import * as logger from '../src/utils/logger';
 import { exec } from '@actions/exec';
+import { readLocalizedReleaseNotes } from '../src/whatsnew';
 import { __testables, run, uploadRun } from '../src/main';
 
 type InputMap = Record<string, string | undefined>;
 
 function setInputs(inputs: InputMap) {
-  (core.getInput as jest.Mock).mockImplementation((name: string) => inputs[name]);
+  (core.getInput as jest.Mock).mockImplementation((name: string) => inputs[name] ?? '');
 }
 
 describe('main module', () => {
@@ -92,6 +97,7 @@ describe('main module', () => {
     (signApkFile as jest.Mock).mockResolvedValue('/releases/app-signed.apk');
     (signAabFile as jest.Mock).mockResolvedValue('/releases/app-signed.aab');
     (exec as jest.Mock).mockResolvedValue(0);
+    (readLocalizedReleaseNotes as jest.Mock).mockResolvedValue([{ language: 'en-US', text: 'localized' }]);
   });
 
   describe('run', () => {
@@ -153,16 +159,15 @@ describe('main module', () => {
 
       await run();
 
-      expect(core.setFailed).toHaveBeenCalledWith('Unknown error occurred.');
+      expect(core.setFailed).toHaveBeenCalledWith('boom');
     });
 
-    test('cleans up service account file in finally when provided', async () => {
+    test('does not own service account cleanup at the router level', async () => {
       setInputs({ type: 'unknown', serviceAccountJsonPlainText: '{}' });
 
       await run();
 
-      expect(logger.d).toHaveBeenCalledWith('Cleaning up service account json file');
-      expect(unlink).toHaveBeenCalledWith('./serviceAccountJson.json');
+      expect(unlink).not.toHaveBeenCalled();
     });
   });
 
@@ -214,7 +219,7 @@ describe('main module', () => {
       expect(unlink).toHaveBeenCalledWith('./serviceAccountJson.json');
     });
 
-    test('uses file-based release notes and warns for missing optional files', async () => {
+    test('fails before upload when provided optional files are missing', async () => {
       setInputs({
         serviceAccountJson: '/tmp/service-account.json',
         packageName: 'com.app',
@@ -235,24 +240,72 @@ describe('main module', () => {
       expect(validateUserFraction).toHaveBeenCalledWith(undefined);
       expect(validateStatus).toHaveBeenCalledWith('completed', false);
       expect(validateInAppUpdatePriority).toHaveBeenCalledWith(undefined);
+      expect(runUploadEdit).not.toHaveBeenCalled();
+      expect(core.setFailed).toHaveBeenCalledWith("Unable to find 'whatsnew' directory @ ./missing-whatsnew");
+    });
+
+    test('fails before upload when provided mapping file is missing', async () => {
+      setInputs({
+        serviceAccountJson: '/tmp/service-account.json',
+        packageName: 'com.app',
+        releaseFiles: './__tests__/releasefiles/release.aab',
+        track: 'production',
+        status: 'completed',
+        mappingFile: './missing-mapping.txt',
+      });
+      (fs.existsSync as jest.Mock).mockImplementation((filePath: string) => filePath !== './missing-mapping.txt');
+
+      await uploadRun();
+
+      expect(runUploadEdit).not.toHaveBeenCalled();
+      expect(core.setFailed).toHaveBeenCalledWith("Unable to find 'mappingFile' @ ./missing-mapping.txt");
+    });
+
+    test('fails before upload when provided debug symbols are missing', async () => {
+      setInputs({
+        serviceAccountJson: '/tmp/service-account.json',
+        packageName: 'com.app',
+        releaseFiles: './__tests__/releasefiles/release.aab',
+        track: 'production',
+        status: 'completed',
+        debugSymbols: './missing-symbols.zip',
+      });
+      (fs.existsSync as jest.Mock).mockImplementation((filePath: string) => filePath !== './missing-symbols.zip');
+
+      await uploadRun();
+
+      expect(runUploadEdit).not.toHaveBeenCalled();
+      expect(core.setFailed).toHaveBeenCalledWith("Unable to find 'debugSymbols' @ ./missing-symbols.zip");
+    });
+
+    test('preloads localized whatsnew notes before upload', async () => {
+      setInputs({
+        serviceAccountJson: '/tmp/service-account.json',
+        packageName: 'com.app',
+        releaseFiles: './__tests__/releasefiles/release.aab',
+        track: 'production',
+        status: 'completed',
+        whatsNewDirectory: './__tests__/whatsnew',
+      });
+
+      await uploadRun();
+
+      expect(readLocalizedReleaseNotes).toHaveBeenCalledWith('./__tests__/whatsnew');
       expect(runUploadEdit).toHaveBeenCalledWith(
         'com.app',
         'production',
         undefined,
         undefined,
-        './missing-whatsnew',
-        './missing-mapping.txt',
-        './missing-symbols.zip',
+        './__tests__/whatsnew',
+        undefined,
+        undefined,
         undefined,
         false,
         undefined,
         'completed',
         ['./__tests__/releasefiles/release.aab'],
-        [{ language: 'en-US', text: 'notes-from-file' }]
+        [{ language: 'en-US', text: 'localized' }]
       );
-      expect(logger.w).toHaveBeenCalledWith("Unable to find 'whatsnew' directory @ ./missing-whatsnew");
-      expect(logger.w).toHaveBeenCalledWith("Unable to find 'mappingFile' @ ./missing-mapping.txt");
-      expect(logger.w).toHaveBeenCalledWith("Unable to find 'debugSymbols' @ ./missing-symbols.zip");
     });
 
     test('trims and removes empty releaseFiles entries before validation', async () => {
@@ -267,6 +320,22 @@ describe('main module', () => {
       await uploadRun();
 
       expect(validateReleaseFiles).toHaveBeenCalledWith(['./__tests__/releasefiles/release.aab', './__tests__/releasefiles/release.apk']);
+    });
+
+    test('reports missing release files before upload', async () => {
+      setInputs({
+        serviceAccountJson: '/tmp/service-account.json',
+        packageName: 'com.app',
+        track: 'production',
+        status: 'completed',
+      });
+      (validateReleaseFiles as jest.Mock).mockRejectedValueOnce(new Error("You must provide 'releaseFiles' in your configuration"));
+
+      await uploadRun();
+
+      expect(validateReleaseFiles).toHaveBeenCalledWith(undefined);
+      expect(runUploadEdit).not.toHaveBeenCalled();
+      expect(core.setFailed).toHaveBeenCalledWith("You must provide 'releaseFiles' in your configuration");
     });
 
     test('dry-run validates inputs but skips the Play API upload', async () => {
@@ -315,7 +384,57 @@ describe('main module', () => {
 
       await uploadRun();
 
-      expect(core.setFailed).toHaveBeenCalledWith('Unknown error occurred.');
+      expect(core.setFailed).toHaveBeenCalledWith('bad-value');
+    });
+
+    test('rejects malformed numeric input strings before upload', async () => {
+      setInputs({
+        serviceAccountJsonPlainText: '{}',
+        packageName: 'com.app',
+        releaseFiles: './__tests__/releasefiles/release.aab',
+        track: 'production',
+        status: 'completed',
+        userFraction: '0.5abc',
+        inAppUpdatePriority: '3abc',
+      });
+
+      await uploadRun();
+
+      expect(runUploadEdit).not.toHaveBeenCalled();
+      expect(core.setFailed).toHaveBeenCalledWith("'userFraction' must be a valid number. Got 0.5abc");
+    });
+
+    test('rejects malformed in-app update priority strings before upload', async () => {
+      setInputs({
+        serviceAccountJsonPlainText: '{}',
+        packageName: 'com.app',
+        releaseFiles: './__tests__/releasefiles/release.aab',
+        track: 'production',
+        status: 'completed',
+        inAppUpdatePriority: '3abc',
+      });
+
+      await uploadRun();
+
+      expect(runUploadEdit).not.toHaveBeenCalled();
+      expect(core.setFailed).toHaveBeenCalledWith("'inAppUpdatePriority' must be a valid integer. Got 3abc");
+    });
+
+    test('propagates pTimeout failures and still cleans up credentials', async () => {
+      setInputs({
+        serviceAccountJsonPlainText: '{}',
+        packageName: 'com.app',
+        releaseFiles: './__tests__/releasefiles/release.aab',
+        track: 'production',
+        status: 'completed',
+      });
+      (pTimeout as jest.Mock).mockRejectedValueOnce(new Error('upload timed out'));
+
+      await uploadRun();
+
+      expect(runUploadEdit).toHaveBeenCalled();
+      expect(core.setFailed).toHaveBeenCalledWith('upload timed out');
+      expect(unlink).toHaveBeenCalledWith('./serviceAccountJson.json');
     });
   });
 
@@ -336,9 +455,27 @@ describe('main module', () => {
     });
 
     test('rejects when neither credential source is provided', async () => {
-      await expect(__testables.validateServiceAccountJson(undefined, undefined)).rejects.toBe(
+      await expect(__testables.validateServiceAccountJson(undefined, undefined)).rejects.toThrow(
         "You must provide one of 'serviceAccountJsonPlainText' or 'serviceAccountJson' to use this action"
       );
+    });
+  });
+
+  describe('__testables.cleanupServiceAccountJsonFile', () => {
+    test('ignores already removed temp credential file', async () => {
+      (unlink as jest.Mock).mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+
+      await __testables.cleanupServiceAccountJsonFile();
+
+      expect(logger.d).toHaveBeenCalledWith('Service account json file already removed: ./serviceAccountJson.json');
+    });
+
+    test('logs cleanup failures without throwing', async () => {
+      (unlink as jest.Mock).mockRejectedValueOnce(new Error('locked'));
+
+      await __testables.cleanupServiceAccountJsonFile();
+
+      expect(logger.w).toHaveBeenCalledWith('Failed to clean up service account json file ./serviceAccountJson.json: locked');
     });
   });
 
@@ -396,10 +533,75 @@ describe('main module', () => {
 
       expect(signApkFile).toHaveBeenCalledTimes(1);
       expect(signAabFile).toHaveBeenCalledTimes(1);
-      expect(core.setFailed).toHaveBeenCalledWith('No valid release file to sign.');
-      expect(core.exportVariable).toHaveBeenCalledWith('SIGNED_RELEASE_FILE_2', '');
-      expect(core.setOutput).toHaveBeenCalledWith('signedReleaseFile2', '');
-      expect(core.exportVariable).toHaveBeenCalledWith('NOF_SIGNED_RELEASE_FILES', '3');
+      expect(core.setFailed).toHaveBeenCalledWith('No valid release file to sign: /releases/bad.txt');
+      expect(core.exportVariable).not.toHaveBeenCalledWith('SIGNED_RELEASE_FILE_2', '');
+      expect(core.setOutput).not.toHaveBeenCalledWith('signedReleaseFile2', '');
+      expect(core.exportVariable).not.toHaveBeenCalledWith('NOF_SIGNED_RELEASE_FILES', '3');
+    });
+
+    test('signs multiple valid artifacts and exports aggregate outputs only', async () => {
+      setInputs({
+        releaseDirectory: '/releases',
+        signingKeyBase64: 'a2V5',
+        alias: 'alias',
+        keyStorePassword: 'store-pass',
+      });
+      (ioUtils.findReleaseFiles as jest.Mock).mockReturnValue([{ name: 'app.apk' }, { name: 'bundle.aab' }]);
+
+      await __testables.signRun();
+
+      expect(core.exportVariable).toHaveBeenCalledWith('SIGNED_RELEASE_FILES', '/releases/app-signed.apk:/releases/app-signed.aab');
+      expect(core.setOutput).toHaveBeenCalledWith('signedReleaseFiles', '/releases/app-signed.apk:/releases/app-signed.aab');
+      expect(core.exportVariable).toHaveBeenCalledWith('NOF_SIGNED_RELEASE_FILES', '2');
+      expect(core.setOutput).toHaveBeenCalledWith('nofSignedReleaseFiles', '2');
+      expect(core.setOutput).not.toHaveBeenCalledWith('signedReleaseFile', expect.any(String));
+    });
+
+    test('reports signer promise rejection without exporting outputs', async () => {
+      setInputs({
+        releaseDirectory: '/releases',
+        signingKeyBase64: 'a2V5',
+        alias: 'alias',
+        keyStorePassword: 'store-pass',
+      });
+      (ioUtils.findReleaseFiles as jest.Mock).mockReturnValue([{ name: 'app.apk' }]);
+      (signApkFile as jest.Mock).mockRejectedValueOnce(new Error('zipalign failed'));
+
+      await __testables.signRun();
+
+      expect(core.setFailed).toHaveBeenCalledWith('zipalign failed');
+      expect(core.setOutput).not.toHaveBeenCalledWith('signedReleaseFiles', expect.any(String));
+    });
+
+    test('reports aab signer promise rejection without exporting outputs', async () => {
+      setInputs({
+        releaseDirectory: '/releases',
+        signingKeyBase64: 'a2V5',
+        alias: 'alias',
+        keyStorePassword: 'store-pass',
+      });
+      (ioUtils.findReleaseFiles as jest.Mock).mockReturnValue([{ name: 'bundle.aab' }]);
+      (signAabFile as jest.Mock).mockRejectedValueOnce(new Error('jarsigner failed'));
+
+      await __testables.signRun();
+
+      expect(core.setFailed).toHaveBeenCalledWith('jarsigner failed');
+      expect(core.setOutput).not.toHaveBeenCalledWith('signedReleaseFiles', expect.any(String));
+    });
+
+    test.each(['releaseDirectory', 'signingKeyBase64', 'alias', 'keyStorePassword'])('reports missing required sign input %s', async inputName => {
+      setInputs({
+        releaseDirectory: '/releases',
+        signingKeyBase64: 'a2V5',
+        alias: 'alias',
+        keyStorePassword: 'store-pass',
+        [inputName]: '',
+      });
+
+      await __testables.signRun();
+
+      expect(core.setFailed).toHaveBeenCalledWith(`Missing required input '${inputName}'`);
+      expect(ioUtils.findReleaseFiles).not.toHaveBeenCalled();
     });
 
     test('handles Error thrown while signing', async () => {
@@ -431,7 +633,7 @@ describe('main module', () => {
 
       await __testables.signRun();
 
-      expect(core.setFailed).toHaveBeenCalledWith('Unknown error occurred.');
+      expect(core.setFailed).toHaveBeenCalledWith('panic');
     });
   });
 
@@ -447,19 +649,28 @@ describe('main module', () => {
 
     test('handles file read failure', async () => {
       (fs.promises.readFile as unknown as jest.Mock).mockRejectedValue(new Error('no file'));
-      await expect(__testables.getReleaseNotes('file', './missing.md', undefined)).resolves.toBeUndefined();
-      expect(core.setFailed).toHaveBeenCalledWith('Failed to read release notes file: ./missing.md');
+      await expect(__testables.getReleaseNotes('file', './missing.md', undefined)).rejects.toThrow(
+        'Failed to read release notes file: ./missing.md: no file'
+      );
     });
 
     test('handles file read failure with non-Error value', async () => {
       (fs.promises.readFile as unknown as jest.Mock).mockRejectedValue('missing');
-      await expect(__testables.getReleaseNotes('file', './missing.md', undefined)).resolves.toBeUndefined();
+      await expect(__testables.getReleaseNotes('file', './missing.md', undefined)).rejects.toThrow(
+        'Failed to read release notes file: ./missing.md: missing'
+      );
       expect(logger.e).toHaveBeenCalledWith('Failed to read release notes file: ./missing.md. Error: missing');
+    });
+
+    test('fails when file release notes source has no path', async () => {
+      await expect(__testables.getReleaseNotes('file', undefined, undefined)).rejects.toThrow(
+        "releaseNotesSource is 'file' but releaseNotesPath was not provided."
+      );
     });
 
     test('generates notes from git commits and logs stderr', async () => {
       (exec as jest.Mock).mockImplementation(
-        async (_cmd: string, _args: string[], options: { listeners: { stdout: (data: Buffer) => void; stderr: (data: Buffer) => void } }) => {
+        (_cmd: string, _args: string[], options: { listeners: { stdout: (data: Buffer) => void; stderr: (data: Buffer) => void } }) => {
           options.listeners.stdout(Buffer.from('feat: a\nfix: b'));
           options.listeners.stderr(Buffer.from('warning'));
         }
@@ -471,7 +682,7 @@ describe('main module', () => {
 
     test('generates notes from git commits without stderr', async () => {
       (exec as jest.Mock).mockImplementation(
-        async (_cmd: string, _args: string[], options: { listeners: { stdout: (data: Buffer) => void; stderr: (data: Buffer) => void } }) => {
+        (_cmd: string, _args: string[], options: { listeners: { stdout: (data: Buffer) => void; stderr: (data: Buffer) => void } }) => {
           options.listeners.stdout(Buffer.from('feat: clean output'));
         }
       );
@@ -482,14 +693,17 @@ describe('main module', () => {
     test('handles git command failure', async () => {
       (exec as jest.Mock).mockRejectedValue(new Error('git unavailable'));
 
-      await expect(__testables.getReleaseNotes('git-commits', undefined, undefined)).resolves.toBeUndefined();
-      expect(core.setFailed).toHaveBeenCalledWith('Failed to generate release notes from git commits.');
+      await expect(__testables.getReleaseNotes('git-commits', undefined, undefined)).rejects.toThrow(
+        'Failed to generate release notes from git commits: git unavailable'
+      );
     });
 
     test('handles git command failure with non-Error value', async () => {
       (exec as jest.Mock).mockRejectedValue('git failed');
 
-      await expect(__testables.getReleaseNotes('git-commits', undefined, undefined)).resolves.toBeUndefined();
+      await expect(__testables.getReleaseNotes('git-commits', undefined, undefined)).rejects.toThrow(
+        'Failed to generate release notes from git commits: git failed'
+      );
       expect(logger.e).toHaveBeenCalledWith('Failed to get git commits: git failed');
     });
 

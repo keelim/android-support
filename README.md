@@ -33,3 +33,8 @@
 | --------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------- |
 | internalSharingDownloadUrls | INTERNAL_SHARING_DOWNLOAD_URLS | A JSON list containing the download urls for every release file uploaded using the `internalsharing` track |
 | internalSharingDownloadUrl  | INTERNAL_SHARING_DOWNLOAD_URL  | The download url for the last release file uploaded using the `internalsharing` track                      |
+
+## Release bundle
+
+The committed GitHub Action bundle is `lib/index.js`. CI and release workflows run `bun run build` and fail if `git diff --exit-code -- lib/index.js`
+detects a stale bundle.

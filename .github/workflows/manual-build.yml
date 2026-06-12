@@ -1,4 +1,4 @@
-name: Manual Build and Version Update
+name: Manual Version Bump PR
 
 on:
   workflow_dispatch:
@@ -16,6 +16,9 @@ on:
 jobs:
   build-and-update:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,67 +27,75 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
       - uses: actions/cache@v4
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-${{ matrix.bun }}-bun-${{ hashFiles('**/bun.lockb') }}
+          key: ${{ runner.os }}-bun-1.3.14-${{ hashFiles('**/bun.lockb') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.bun }}-bun-
+            ${{ runner.os }}-bun-1.3.14-
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Calculate new version
         id: version
         run: |
-          CURRENT_VERSION=$(cat package.json | grep '"version"' | head -1 | awk -F: '{ print $2 }' | sed 's/[",]//g' | tr -d '[[:space:]]')
-          IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
-          case "${{ github.event.inputs.build_type }}" in
-            "major")
-              major=$((major + 1))
-              minor=0
-              patch=0
-              ;;
-            "minor")
-              minor=$((minor + 1))
-              patch=0
-              ;;
-            "patch")
-              patch=$((patch + 1))
-              ;;
-          esac
-          NEW_VERSION="$major.$minor.$patch"
-          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          NEW_VERSION=$(node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const buildType = process.env.BUILD_TYPE;
+            const match = /^([0-9]+)\.([0-9]+)\.([0-9]+)$/.exec(pkg.version);
+            if (!match) throw new Error('package.json version must be x.y.z');
+            const next = match.slice(1).map(Number);
+            if (buildType === 'major') {
+              next[0] += 1;
+              next[1] = 0;
+              next[2] = 0;
+            } else if (buildType === 'minor') {
+              next[1] += 1;
+              next[2] = 0;
+            } else if (buildType === 'patch') {
+              next[2] += 1;
+            } else {
+              throw new Error('Unsupported build_type: ' + buildType);
+            }
+            process.stdout.write(next.join('.'));
+          ")
+          echo "NEW_VERSION=$NEW_VERSION" >> "$GITHUB_ENV"
+        env:
+          BUILD_TYPE: ${{ github.event.inputs.build_type }}
 
       - name: Update package.json version
         run: |
-          sed -i "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"${{ env.NEW_VERSION }}\"/" package.json
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = process.env.NEW_VERSION;
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
 
-      - name: Build
+      - name: Check action contract drift
+        run: bun run check:contract
+
+      - name: Check workflow release gates
+        run: bun run check:ci-release
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Run tests
+        run: bun run test
+
+      - name: Run tests with coverage
+        run: bun run test:coverage
+
+      - name: Build action bundle
         run: bun run build
 
-      - uses: rickstaa/action-create-tag@v1
-        with:
-          tag: 'v${{ env.NEW_VERSION }}'
-          force_push_tag: true
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          name: Release v${{ env.NEW_VERSION }}
-          tag_name: 'v${{ env.NEW_VERSION }}'
-          body: |
-            ## 변경사항
-            - 버전 업데이트: ${{ env.NEW_VERSION }}
-            - lib/index.js 빌드 완료
-          draft: false
-          prerelease: false
-          files: |
-            lib/index.js
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify committed action bundle is fresh
+        run: git diff --exit-code -- lib/index.js
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v5
@@ -96,9 +107,9 @@ jobs:
             자동으로 생성된 PR입니다.
             - 버전 업데이트: ${{ env.NEW_VERSION }}
             - lib/index.js 빌드 완료
-            - git tag v${{ env.NEW_VERSION }} 생성
-            - GitHub Release v${{ env.NEW_VERSION }} 생성
-          branch: version-bump
+            - 테스트/커버리지/typecheck/계약 drift 검증 완료
+            - main merge 후 Release workflow가 v${{ env.NEW_VERSION }} 태그와 GitHub Release를 생성합니다.
+          branch: version-bump/${{ env.NEW_VERSION }}
           base: main
           labels: |
             automated pr

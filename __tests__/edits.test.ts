@@ -1,5 +1,6 @@
 const mockAndroidPublisher = {
   edits: {
+    delete: jest.fn(),
     commit: jest.fn(),
     tracks: {
       list: jest.fn(),
@@ -51,6 +52,8 @@ jest.mock('../src/utils/logger', () => ({
 
 jest.mock('fs', () => ({
   __esModule: true,
+  accessSync: jest.fn(),
+  constants: { R_OK: 4 },
   createReadStream: jest.fn(() => 'stream'),
   readdirSync: jest.fn(),
   statSync: jest.fn(),
@@ -62,6 +65,27 @@ import * as core from '@actions/core';
 import * as fs from 'fs';
 import { readLocalizedReleaseNotes } from '../src/whatsnew';
 import { __testables, EditOptions, runUpload } from '../src/edits';
+
+type TrackUpdateRequest = {
+  requestBody: {
+    releases: Array<{
+      inAppUpdatePriority?: number;
+      releaseNotes?: Array<{ language?: string | null; text?: string | null }>;
+      userFraction?: number;
+      versionCodes?: string[];
+    }>;
+  };
+};
+
+type TrackUpdateMock = jest.Mock<unknown, [TrackUpdateRequest]>;
+
+function lastTrackUpdateRequest(): TrackUpdateRequest {
+  const call = (mockAndroidPublisher.edits.tracks.update as TrackUpdateMock).mock.calls.at(-1);
+  if (!call) {
+    throw new Error('tracks.update was not called');
+  }
+  return call[0];
+}
 
 function options(overrides: Partial<EditOptions> = {}): EditOptions {
   return {
@@ -89,9 +113,14 @@ describe('edits module', () => {
     });
     mockAndroidPublisher.edits.apks.upload.mockResolvedValue({ data: { versionCode: 101 } });
     mockAndroidPublisher.edits.bundles.upload.mockResolvedValue({ data: { versionCode: 202 } });
-    mockAndroidPublisher.edits.tracks.update.mockResolvedValue({ data: { track: 'production' } });
+    mockAndroidPublisher.edits.tracks.update.mockResolvedValue({
+      status: 200,
+      statusText: 'OK',
+      data: { track: 'production', releases: [{ versionCodes: ['101', '102', '201', '202'] }] },
+    });
     mockAndroidPublisher.edits.commit.mockResolvedValue({ data: { id: 'edit-1' }, status: 200, statusText: 'OK' });
     mockAndroidPublisher.edits.insert.mockResolvedValue({ data: { id: 'new-edit' } });
+    mockAndroidPublisher.edits.delete.mockResolvedValue({});
     mockAndroidPublisher.edits.deobfuscationfiles.upload.mockResolvedValue({});
     (readLocalizedReleaseNotes as jest.Mock).mockResolvedValue([{ language: 'en-US', text: 'notes' }]);
     (fs.readFileSync as jest.Mock).mockReturnValue(Buffer.from('file'));
@@ -144,8 +173,8 @@ describe('edits module', () => {
       undefined
     );
 
-    expect(core.setOutput).toHaveBeenCalledWith('internalSharingDownloadUrls', ['https://download/apk', 'https://download/aab']);
-    expect(core.exportVariable).toHaveBeenCalledWith('INTERNAL_SHARING_DOWNLOAD_URLS', ['https://download/apk', 'https://download/aab']);
+    expect(core.setOutput).toHaveBeenCalledWith('internalSharingDownloadUrls', '["https://download/apk","https://download/aab"]');
+    expect(core.exportVariable).toHaveBeenCalledWith('INTERNAL_SHARING_DOWNLOAD_URLS', '["https://download/apk","https://download/aab"]');
   });
 
   test('runUpload defaults inAppUpdatePriority to zero when undefined', async () => {
@@ -165,28 +194,67 @@ describe('edits module', () => {
       undefined
     );
 
-    expect(mockAndroidPublisher.edits.tracks.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requestBody: expect.objectContaining({
-          releases: [expect.objectContaining({ inAppUpdatePriority: 0 })],
-        }),
-      })
-    );
+    expect(lastTrackUpdateRequest().requestBody.releases).toMatchObject([{ inAppUpdatePriority: 0 }]);
   });
 
   describe('__testables.uploadToPlayStore', () => {
     test('rejects when commit response has no edit id', async () => {
       mockAndroidPublisher.edits.commit.mockResolvedValueOnce({ data: {}, status: 500, statusText: 'FAIL' });
 
-      await expect(__testables.uploadToPlayStore(options(), ['app.aab'])).rejects.toBe(500);
-      expect(core.setFailed).toHaveBeenCalledWith('Error 500: FAIL');
+      await expect(__testables.uploadToPlayStore(options(), ['app.aab'])).rejects.toThrow(
+        'Commit response missing edit id (packageName=com.example.app, editId=new-edit, track=production, status=500, statusText=FAIL)'
+      );
+      expect(core.setFailed).not.toHaveBeenCalled();
+      expect(mockAndroidPublisher.edits.delete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          editId: 'new-edit',
+          packageName: 'com.example.app',
+        })
+      );
+    });
+
+    test('logs cleanup failure when deleting a new edit fails', async () => {
+      mockAndroidPublisher.edits.commit.mockResolvedValueOnce({ data: {}, status: 500, statusText: 'FAIL' });
+      mockAndroidPublisher.edits.delete.mockRejectedValue(new Error('delete unavailable'));
+
+      await expect(__testables.uploadToPlayStore(options(), ['app.aab'])).rejects.toThrow('Commit response missing edit id');
+      expect(mockAndroidPublisher.edits.delete).toHaveBeenCalled();
+    });
+
+    test('does not delete caller-owned existing edit on failure', async () => {
+      mockAndroidPublisher.edits.tracks.list.mockResolvedValueOnce({ status: 404, statusText: 'Not Found', data: {} });
+
+      await expect(__testables.uploadToPlayStore(options({ existingEditId: 'caller-edit' }), ['app.aab'])).rejects.toThrow(
+        'Failed to list tracks'
+      );
+      expect(mockAndroidPublisher.edits.delete).not.toHaveBeenCalled();
+    });
+
+    test('rejects empty release file arrays before Play API calls', async () => {
+      await expect(__testables.uploadToPlayStore(options(), [])).rejects.toThrow('At least one release file is required for upload.');
+      expect(mockAndroidPublisher.edits.insert).not.toHaveBeenCalled();
+    });
+
+    test('wraps rejected commit promises and cleans up new edits', async () => {
+      mockAndroidPublisher.edits.commit.mockRejectedValue(new Error('commit network failed'));
+
+      await expect(__testables.uploadToPlayStore(options(), ['app.aab'])).rejects.toThrow('edits.commit failed');
+      expect(mockAndroidPublisher.edits.delete).toHaveBeenCalledWith(expect.objectContaining({ editId: 'new-edit' }));
+    });
+
+    test('wraps rejected tracks.update promises and skips commit', async () => {
+      mockAndroidPublisher.edits.tracks.update.mockRejectedValue(new Error('track update failed'));
+
+      await expect(__testables.uploadToPlayStore(options(), ['app.aab'])).rejects.toThrow('tracks.update failed');
+      expect(mockAndroidPublisher.edits.commit).not.toHaveBeenCalled();
+      expect(mockAndroidPublisher.edits.delete).toHaveBeenCalled();
     });
   });
 
   describe('__testables.uploadInternalSharingRelease', () => {
     test('uploads apk and returns download url', async () => {
       await expect(__testables.uploadInternalSharingRelease(options(), 'app.apk')).resolves.toBe('https://download/apk');
-      expect(core.setOutput).toHaveBeenCalledWith('internalSharingDownloadUrl', 'https://download/apk');
+      expect(core.setOutput).not.toHaveBeenCalledWith('internalSharingDownloadUrl', 'https://download/apk');
     });
 
     test('uploads aab and returns download url', async () => {
@@ -208,7 +276,9 @@ describe('edits module', () => {
   describe('__testables.validateSelectedTrack', () => {
     test('throws on non-200 response', async () => {
       mockAndroidPublisher.edits.tracks.list.mockResolvedValueOnce({ status: 404, statusText: 'Not Found', data: {} });
-      await expect(__testables.validateSelectedTrack('edit-1', options())).rejects.toThrow('Not Found');
+      await expect(__testables.validateSelectedTrack('edit-1', options())).rejects.toThrow(
+        'Failed to list tracks (packageName=com.example.app, editId=edit-1, requestedTrack=production, status=404, statusText=Not Found)'
+      );
     });
 
     test('throws when track list is missing', async () => {
@@ -241,21 +311,15 @@ describe('edits module', () => {
         [101, 0, 102]
       );
 
-      expect(result).toEqual({ track: 'production' });
+      expect(result).toEqual({ track: 'production', releases: [{ versionCodes: ['101', '102', '201', '202'] }] });
       expect(readLocalizedReleaseNotes).not.toHaveBeenCalled();
-      expect(mockAndroidPublisher.edits.tracks.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          requestBody: expect.objectContaining({
-            releases: [
-              expect.objectContaining({
-                userFraction: 0.5,
-                releaseNotes: explicitNotes,
-                versionCodes: ['101', '102'],
-              }),
-            ],
-          }),
-        })
-      );
+      expect(lastTrackUpdateRequest().requestBody.releases).toMatchObject([
+        {
+          userFraction: 0.5,
+          releaseNotes: explicitNotes,
+          versionCodes: ['101', '102'],
+        },
+      ]);
     });
 
     test('loads localized release notes when explicit notes are missing', async () => {
@@ -271,13 +335,61 @@ describe('edits module', () => {
     test('removes every zero version code before converting to strings', async () => {
       await __testables.addReleasesToTrack('edit-1', options({ releaseNotes: [{ language: 'en-US', text: 'notes' }] }), [0, 101, 0, 102, 0]);
 
-      expect(mockAndroidPublisher.edits.tracks.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          requestBody: expect.objectContaining({
-            releases: [expect.objectContaining({ versionCodes: ['101', '102'] })],
-          }),
-        })
-      );
+      expect(lastTrackUpdateRequest().requestBody.releases).toMatchObject([{ versionCodes: ['101', '102'] }]);
+    });
+
+    test('rejects when tracks.update response omits requested version codes', async () => {
+      mockAndroidPublisher.edits.tracks.update.mockResolvedValueOnce({
+        status: 200,
+        statusText: 'OK',
+        data: { track: 'production', releases: [{ versionCodes: ['101'] }] },
+      });
+
+      await expect(
+        __testables.addReleasesToTrack('edit-1', options({ releaseNotes: [{ language: 'en-US', text: 'notes' }] }), [101, 202])
+      ).rejects.toThrow('tracks.update response mismatch');
+    });
+
+    test('rejects when tracks.update response omits release versionCodes', async () => {
+      mockAndroidPublisher.edits.tracks.update.mockResolvedValueOnce({
+        status: 200,
+        statusText: 'OK',
+        data: { track: 'production', releases: [{}] },
+      });
+
+      await expect(
+        __testables.addReleasesToTrack('edit-1', options({ releaseNotes: [{ language: 'en-US', text: 'notes' }] }), [101])
+      ).rejects.toThrow('tracks.update response mismatch');
+    });
+
+    test('rejects when tracks.update response omits releases', async () => {
+      mockAndroidPublisher.edits.tracks.update.mockResolvedValueOnce({
+        status: 200,
+        statusText: 'OK',
+        data: { track: 'production' },
+      });
+
+      await expect(
+        __testables.addReleasesToTrack('edit-1', options({ releaseNotes: [{ language: 'en-US', text: 'notes' }] }), [101])
+      ).rejects.toThrow('tracks.update response mismatch');
+    });
+
+    test('rejects when there are no valid version codes', async () => {
+      await expect(
+        __testables.addReleasesToTrack('edit-1', options({ releaseNotes: [{ language: 'en-US', text: 'notes' }] }), [0])
+      ).rejects.toThrow('No valid versionCodes to release for edit edit-1 on track production');
+    });
+
+    test('rejects when tracks.update returns a non-success status', async () => {
+      mockAndroidPublisher.edits.tracks.update.mockResolvedValueOnce({
+        status: 500,
+        statusText: 'Server Error',
+        data: { track: 'production', releases: [{ versionCodes: ['101'] }] },
+      });
+
+      await expect(
+        __testables.addReleasesToTrack('edit-1', options({ releaseNotes: [{ language: 'en-US', text: 'notes' }] }), [101])
+      ).rejects.toThrow('tracks.update failed');
     });
   });
 
@@ -302,6 +414,17 @@ describe('edits module', () => {
           deobfuscationFileType: 'proguard',
         })
       );
+    });
+
+    test('propagates mapping file read failures and skips upload', async () => {
+      (fs.readFileSync as jest.Mock).mockImplementationOnce(() => {
+        throw new Error('mapping unreadable');
+      });
+
+      await expect(__testables.uploadMappingFile('edit-1', 101, options({ mappingFile: './mapping.txt' }))).rejects.toThrow(
+        'mapping unreadable'
+      );
+      expect(mockAndroidPublisher.edits.deobfuscationfiles.upload).not.toHaveBeenCalled();
     });
   });
 
@@ -344,6 +467,25 @@ describe('edits module', () => {
           apkVersionCode: 102,
           deobfuscationFileType: 'nativeCode',
         })
+      );
+    });
+
+    test('propagates debug symbols lstat failures', async () => {
+      (fs.lstatSync as jest.Mock).mockImplementationOnce(() => {
+        throw new Error('lstat failed');
+      });
+
+      await expect(__testables.uploadDebugSymbolsFile('edit-1', 102, options({ debugSymbols: '/symbols.zip' }))).rejects.toThrow('lstat failed');
+      expect(mockAndroidPublisher.edits.deobfuscationfiles.upload).not.toHaveBeenCalled();
+    });
+
+    test('propagates debug symbols upload failures', async () => {
+      (fs.lstatSync as jest.Mock).mockReturnValueOnce({ isDirectory: () => false });
+      (fs.readFileSync as jest.Mock).mockReturnValueOnce(Buffer.from('sym'));
+      mockAndroidPublisher.edits.deobfuscationfiles.upload.mockRejectedValue(new Error('symbols upload failed'));
+
+      await expect(__testables.uploadDebugSymbolsFile('edit-1', 102, options({ debugSymbols: '/symbols.zip' }))).rejects.toThrow(
+        'deobfuscationfiles.upload.debugSymbols failed'
       );
     });
   });
@@ -411,6 +553,69 @@ describe('edits module', () => {
       expect(mockAndroidPublisher.edits.bundles.upload).toHaveBeenCalled();
       expect(res).toEqual({ versionCode: 202 });
     });
+
+    test('wraps rejected apk upload promises', async () => {
+      mockAndroidPublisher.edits.apks.upload.mockRejectedValue(new Error('apk upload failed'));
+
+      await expect(__testables.uploadApk('edit-1', options(), 'app.apk')).rejects.toThrow('apks.upload failed');
+    });
+
+    test('wraps rejected bundle upload promises', async () => {
+      mockAndroidPublisher.edits.bundles.upload.mockRejectedValue(new Error('bundle upload failed'));
+
+      await expect(__testables.uploadBundle('edit-1', options(), 'app.aab')).rejects.toThrow('bundles.upload failed');
+    });
+
+    test('wraps unreadable apk paths', async () => {
+      (fs.accessSync as jest.Mock).mockImplementationOnce(() => {
+        throw new Error('no access');
+      });
+
+      await expect(__testables.uploadApk('edit-1', options(), 'missing.apk')).rejects.toThrow(
+        'Unable to read APK release artifact file missing.apk: no access'
+      );
+    });
+
+    test('wraps unreadable internal sharing bundle paths', async () => {
+      (fs.accessSync as jest.Mock).mockImplementationOnce(() => {
+        throw 'no access';
+      });
+
+      await expect(__testables.internalSharingUploadBundle(options(), 'missing.aab')).rejects.toThrow(
+        'Unable to read internal sharing bundle file missing.aab: no access'
+      );
+    });
+
+    test('wraps google api failures with context', async () => {
+      await expect(__testables.withGoogleApiGuard('custom.operation', {}, async () => Promise.reject('bad'))).rejects.toThrow(
+        'custom.operation failed: bad'
+      );
+    });
+
+    test('classifies retryable google api errors', () => {
+      expect(__testables.isRetryableError(null)).toBe(true);
+      expect(__testables.isRetryableError({ status: 500 })).toBe(true);
+      expect(__testables.isRetryableError({ code: 408 })).toBe(true);
+      expect(__testables.isRetryableError({ response: { status: 429 } })).toBe(true);
+      expect(__testables.isRetryableError({ status: 400 })).toBe(false);
+    });
+
+    test('times out stalled google api calls', async () => {
+      jest.useFakeTimers();
+      try {
+        const guarded = expect(
+          __testables.withGoogleApiGuard('slow.operation', {}, async () => new Promise(() => undefined))
+        ).rejects.toThrow('slow.operation failed: slow.operation timed out after 600000ms');
+
+        await jest.advanceTimersByTimeAsync(10 * 60 * 1000);
+        await jest.advanceTimersByTimeAsync(10 * 60 * 1000);
+        await jest.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+        await guarded;
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   describe('__testables.getOrCreateEdit', () => {
@@ -447,20 +652,41 @@ describe('edits module', () => {
 
     test('defaults version code to zero when apk upload has no version', async () => {
       mockAndroidPublisher.edits.apks.upload.mockResolvedValueOnce({ data: {} });
-      const result = await __testables.uploadReleaseFiles('edit-1', options(), ['one.apk']);
-      expect(result).toEqual([0]);
+      await expect(__testables.uploadReleaseFiles('edit-1', options(), ['one.apk'])).rejects.toThrow(
+        'APK upload for one.apk in edit edit-1 did not return a positive integer versionCode'
+      );
     });
 
     test('defaults bundle version code to zero when bundle upload has no version', async () => {
       mockAndroidPublisher.edits.bundles.upload.mockResolvedValueOnce({ data: {} });
-      const result = await __testables.uploadReleaseFiles('edit-1', options(), ['one.aab']);
-      expect(result).toEqual([0]);
+      await expect(__testables.uploadReleaseFiles('edit-1', options(), ['one.aab'])).rejects.toThrow(
+        'AAB upload for one.aab in edit edit-1 did not return a positive integer versionCode'
+      );
+    });
+
+    test('summarizes uploaded version codes when later file upload fails', async () => {
+      mockAndroidPublisher.edits.bundles.upload.mockRejectedValue(new Error('network down'));
+
+      await expect(__testables.uploadReleaseFiles('edit-1', options(), ['one.apk', 'two.aab'])).rejects.toThrow(
+        'uploadedVersionCodes=101'
+      );
     });
 
     test('throws for invalid release extension', async () => {
       await expect(__testables.uploadReleaseFiles('edit-1', options(), ['bad.txt'])).rejects.toThrow(
         'bad.txt is invalid (missing or invalid file extension).'
       );
+    });
+
+    test('preflights mapping and debug symbols before creating an edit', async () => {
+      (fs.accessSync as jest.Mock).mockImplementation((filePath: string) => {
+        if (filePath === './symbols.zip') throw new Error('missing symbols');
+      });
+
+      await expect(
+        __testables.uploadToPlayStore(options({ mappingFile: './mapping.txt', debugSymbols: './symbols.zip' }), ['one.apk'])
+      ).rejects.toThrow('Unable to read debugSymbols path ./symbols.zip: missing symbols');
+      expect(mockAndroidPublisher.edits.insert).not.toHaveBeenCalled();
     });
   });
 

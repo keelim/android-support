@@ -11,5 +11,5 @@ module.exports = {
         'plugin:@typescript-eslint/recommended',
         'plugin:@typescript-eslint/recommended-requiring-type-checking',
     ],
-    ignorePatterns: ["lib/*.js", "jest.config.js", "__tests__/**"]
+    ignorePatterns: ["lib/*.js", "jest.config.js"]
 };

@@ -1,7 +1,7 @@
 import { validateInAppUpdatePriority, validateReleaseFiles, validateStatus, validateUserFraction } from '../src/input-validation';
 
 test('invalid in-app update priority fails validation', async () => {
-  const testValues = [-1, 6, -1000, 1000];
+  const testValues = [-1, 6, -1000, 1000, NaN, Infinity, 1.5, 5.1];
   for (const value of testValues) {
     await expect(validateInAppUpdatePriority(value)).rejects.toThrowError();
   }
@@ -25,6 +25,11 @@ test('invalid releaseFiles glob fails validation', async () => {
 
 test('missing releaseFiles fails validation', async () => {
   await expect(validateReleaseFiles(undefined)).rejects.toThrowError(`You must provide 'releaseFiles' in your configuration`);
+});
+
+test('empty releaseFiles fails validation', async () => {
+  await expect(validateReleaseFiles([])).rejects.toThrowError(`You must provide 'releaseFiles' in your configuration`);
+  await expect(validateReleaseFiles([''])).rejects.toThrowError(`You must provide 'releaseFiles' in your configuration`);
 });
 
 test('valid releaseFiles glob passes validation', async () => {

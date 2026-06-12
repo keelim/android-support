@@ -20,7 +20,55 @@ import { exec } from '@actions/exec';
 import { androidpublisher_v3 } from '@googleapis/androidpublisher';
 import { compact } from 'es-toolkit/array';
 import { isNotNil } from 'es-toolkit/predicate';
+import { readLocalizedReleaseNotes } from './whatsnew';
 import LocalizedText = androidpublisher_v3.Schema$LocalizedText;
+
+const SERVICE_ACCOUNT_FILE = './serviceAccountJson.json';
+const STRICT_NUMBER_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+
+function normalizeError(error: unknown): Error {
+  if (error instanceof Error) return error;
+  return new Error(String(error));
+}
+
+function parseStrictNumberInput(value: string, inputName: string): number {
+  if (!STRICT_NUMBER_PATTERN.test(value)) {
+    throw new Error(`'${inputName}' must be a valid number. Got ${value}`);
+  }
+  return Number(value);
+}
+
+function parseStrictIntegerInput(value: string, inputName: string): number {
+  if (!/^(?:0|[1-9]\d*)$/.test(value)) {
+    throw new Error(`'${inputName}' must be a valid integer. Got ${value}`);
+  }
+  return Number(value);
+}
+
+function requireInputValue(value: string, inputName: string): string {
+  if (!value) {
+    throw new Error(`Missing required input '${inputName}'`);
+  }
+  return value;
+}
+
+function optionalInputValue(value: string): string | undefined {
+  return value.length > 0 ? value : undefined;
+}
+
+async function cleanupServiceAccountJsonFile(): Promise<void> {
+  logger.d('Cleaning up service account json file');
+  try {
+    await unlink(SERVICE_ACCOUNT_FILE);
+  } catch (error: unknown) {
+    const normalized = normalizeError(error);
+    if ((normalized as NodeJS.ErrnoException).code === 'ENOENT') {
+      logger.d(`Service account json file already removed: ${SERVICE_ACCOUNT_FILE}`);
+      return;
+    }
+    logger.w(`Failed to clean up service account json file ${SERVICE_ACCOUNT_FILE}: ${normalized.message}`);
+  }
+}
 
 /**
  * 메인 실행 함수
@@ -37,17 +85,7 @@ export async function run() {
       core.setFailed(`Unknown type: ${type}`);
     }
   } catch (error: unknown) {
-    if (error instanceof Error) {
-      core.setFailed(error.message);
-    } else {
-      core.setFailed('Unknown error occurred.');
-    }
-  } finally {
-    if (core.getInput('serviceAccountJsonPlainText', { required: false })) {
-      // 서비스 계정 JSON 파일 정리
-      logger.d('Cleaning up service account json file');
-      await unlink('./serviceAccountJson.json');
-    }
+    core.setFailed(normalizeError(error).message);
   }
 }
 
@@ -58,25 +96,25 @@ export async function run() {
 export async function uploadRun() {
   try {
     // 필수 및 선택적 입력값 가져오기
-    const serviceAccountJson = core.getInput('serviceAccountJson', { required: false });
-    const serviceAccountJsonRaw = core.getInput('serviceAccountJsonPlainText', { required: false });
-    const packageName = core.getInput('packageName', { required: true });
-    const releaseFile = core.getInput('releaseFile', { required: false });
+    const serviceAccountJson = optionalInputValue(core.getInput('serviceAccountJson', { required: false }));
+    const serviceAccountJsonRaw = optionalInputValue(core.getInput('serviceAccountJsonPlainText', { required: false }));
+    const packageName = requireInputValue(core.getInput('packageName', { required: false }), 'packageName');
+    const releaseFile = optionalInputValue(core.getInput('releaseFile', { required: false }));
     const releaseFilesInput = core.getInput('releaseFiles', { required: false });
-    const releaseFiles = isNotNil(releaseFilesInput) ? compact(releaseFilesInput.split(',').map(value => value.trim())) : undefined;
-    const releaseName = core.getInput('releaseName', { required: false });
-    const track = core.getInput('track', { required: true });
+    const releaseFiles = releaseFilesInput ? compact(releaseFilesInput.split(',').map(value => value.trim())) : undefined;
+    const releaseName = optionalInputValue(core.getInput('releaseName', { required: false }));
+    const track = requireInputValue(core.getInput('track', { required: false }), 'track');
     const inAppUpdatePriority = core.getInput('inAppUpdatePriority', { required: false });
     const userFraction = core.getInput('userFraction', { required: false });
     const status = core.getInput('status', { required: false });
-    const whatsNewDir = core.getInput('whatsNewDirectory', { required: false });
-    const mappingFile = core.getInput('mappingFile', { required: false });
-    const debugSymbols = core.getInput('debugSymbols', { required: false });
+    const whatsNewDir = optionalInputValue(core.getInput('whatsNewDirectory', { required: false }));
+    const mappingFile = optionalInputValue(core.getInput('mappingFile', { required: false }));
+    const debugSymbols = optionalInputValue(core.getInput('debugSymbols', { required: false }));
     const changesNotSentForReview = core.getInput('changesNotSentForReview', { required: false }) == 'true';
-    const existingEditId = core.getInput('existingEditId');
+    const existingEditId = optionalInputValue(core.getInput('existingEditId'));
     const releaseNotesSource = core.getInput('releaseNotesSource', { required: false }) || 'none';
-    const releaseNotesPath = core.getInput('releaseNotesPath', { required: false });
-    const releaseNotesContent = core.getInput('releaseNotes', { required: false });
+    const releaseNotesPath = optionalInputValue(core.getInput('releaseNotesPath', { required: false }));
+    const releaseNotesContent = optionalInputValue(core.getInput('releaseNotes', { required: false }));
     const dryRun = core.getInput('dryRun', { required: false }) == 'true';
 
     logger.d('Starting app upload process with the following inputs:');
@@ -115,7 +153,7 @@ export async function uploadRun() {
     // 사용자 분수 검증
     let userFractionFloat: number | undefined;
     if (userFraction) {
-      userFractionFloat = parseFloat(userFraction);
+      userFractionFloat = parseStrictNumberInput(userFraction, 'userFraction');
     } else {
       userFractionFloat = undefined;
     }
@@ -131,7 +169,7 @@ export async function uploadRun() {
     // 인앱 업데이트 우선순위 검증 (0-5 사이의 숫자)
     let inAppUpdatePriorityInt: number | undefined;
     if (inAppUpdatePriority) {
-      inAppUpdatePriorityInt = parseInt(inAppUpdatePriority);
+      inAppUpdatePriorityInt = parseStrictIntegerInput(inAppUpdatePriority, 'inAppUpdatePriority');
     } else {
       inAppUpdatePriorityInt = undefined;
     }
@@ -143,30 +181,35 @@ export async function uploadRun() {
     if (releaseFile) {
       logger.w(`WARNING!! 'releaseFile' is deprecated and will be removed in a future release. Please migrate to 'releaseFiles'`);
     }
-    logger.d(`Validating release files: ${releaseFiles ?? [releaseFile]}`);
-    const validatedReleaseFiles: string[] = await validateReleaseFiles(releaseFiles ?? [releaseFile]);
+    const releaseFileCandidates = releaseFiles ?? (releaseFile ? [releaseFile] : undefined);
+    logger.d(`Validating release files: ${releaseFileCandidates}`);
+    const validatedReleaseFiles: string[] = await validateReleaseFiles(releaseFileCandidates);
     logger.d(`Release files validated: ${validatedReleaseFiles.join(', ')}`);
 
     // 추가 파일 존재 여부 확인
     logger.d('Checking for additional files (whatsNewDir, mappingFile, debugSymbols).');
     if (isNotNil(whatsNewDir) && whatsNewDir.length > 0 && !fs.existsSync(whatsNewDir)) {
-      logger.w(`Unable to find 'whatsnew' directory @ ${whatsNewDir}`);
+      throw new Error(`Unable to find 'whatsnew' directory @ ${whatsNewDir}`);
     } else if (whatsNewDir) {
       logger.d(`'whatsnew' directory found @ ${whatsNewDir}`);
     }
 
     if (isNotNil(mappingFile) && mappingFile.length > 0 && !fs.existsSync(mappingFile)) {
-      logger.w(`Unable to find 'mappingFile' @ ${mappingFile}`);
+      throw new Error(`Unable to find 'mappingFile' @ ${mappingFile}`);
     } else if (mappingFile) {
       logger.d(`'mappingFile' found @ ${mappingFile}`);
     }
 
     if (isNotNil(debugSymbols) && debugSymbols.length > 0 && !fs.existsSync(debugSymbols)) {
-      logger.w(`Unable to find 'debugSymbols' @ ${debugSymbols}`);
+      throw new Error(`Unable to find 'debugSymbols' @ ${debugSymbols}`);
     } else if (debugSymbols) {
       logger.d(`'debugSymbols' found @ ${debugSymbols}`);
     }
     logger.d('Additional file checks complete.');
+
+    if (!releaseNotes && whatsNewDir) {
+      releaseNotes = await readLocalizedReleaseNotes(whatsNewDir);
+    }
 
     // Dry-run: 위의 모든 검증을 통과한 상태에서 Play API 변경 전에 중단한다 (업로드 없음).
     if (dryRun) {
@@ -199,16 +242,10 @@ export async function uploadRun() {
     );
     logger.d('App upload process completed successfully.');
   } catch (error: unknown) {
-    if (error instanceof Error) {
-      core.setFailed(error.message);
-    } else {
-      core.setFailed('Unknown error occurred.');
-    }
+    core.setFailed(normalizeError(error).message);
   } finally {
     if (core.getInput('serviceAccountJsonPlainText', { required: false })) {
-      // 서비스 계정 JSON 파일 정리
-      logger.d('Cleaning up service account json file');
-      await unlink('./serviceAccountJson.json');
+      await cleanupServiceAccountJsonFile();
     }
   }
 }
@@ -221,7 +258,7 @@ export async function uploadRun() {
 async function validateServiceAccountJson(
   serviceAccountJsonRaw: string | undefined,
   serviceAccountJson: string | undefined
-): Promise<string | undefined> {
+): Promise<void> {
   if (serviceAccountJson && serviceAccountJsonRaw) {
     // 두 가지 방식이 모두 제공된 경우 경고
     logger.w("Both 'serviceAccountJsonPlainText' and 'serviceAccountJson' were provided! 'serviceAccountJson' will be ignored.");
@@ -229,7 +266,7 @@ async function validateServiceAccountJson(
 
   if (serviceAccountJsonRaw) {
     // 원본 텍스트가 제공된 경우 파일로 저장
-    const serviceAccountFile = './serviceAccountJson.json';
+    const serviceAccountFile = SERVICE_ACCOUNT_FILE;
     await writeFile(serviceAccountFile, serviceAccountJsonRaw, {
       encoding: 'utf8',
     });
@@ -239,7 +276,7 @@ async function validateServiceAccountJson(
     core.exportVariable('GOOGLE_APPLICATION_CREDENTIALS', serviceAccountJson);
   } else {
     // 둘 다 제공되지 않은 경우 오류
-    return Promise.reject("You must provide one of 'serviceAccountJsonPlainText' or 'serviceAccountJson' to use this action");
+    throw new Error("You must provide one of 'serviceAccountJsonPlainText' or 'serviceAccountJson' to use this action");
   }
 }
 
@@ -255,10 +292,10 @@ async function signRun() {
     }
 
     // 서명에 필요한 입력값 가져오기
-    const releaseDir = core.getInput('releaseDirectory');
-    const signingKeyBase64 = core.getInput('signingKeyBase64');
-    const alias = core.getInput('alias');
-    const keyStorePassword = core.getInput('keyStorePassword');
+    const releaseDir = requireInputValue(core.getInput('releaseDirectory'), 'releaseDirectory');
+    const signingKeyBase64 = requireInputValue(core.getInput('signingKeyBase64'), 'signingKeyBase64');
+    const alias = requireInputValue(core.getInput('alias'), 'alias');
+    const keyStorePassword = requireInputValue(core.getInput('keyStorePassword'), 'keyStorePassword');
     const keyPassword = core.getInput('keyPassword');
 
     console.log(`Preparing to sign key @ ${releaseDir} with signing key`);
@@ -282,8 +319,7 @@ async function signRun() {
         } else if (releaseFile.name.endsWith('.aab')) {
           signedReleaseFile = await signAabFile(releaseFilePath, signingKey, alias, keyStorePassword, keyPassword);
         } else {
-          logger.e('No valid release file to sign, abort.');
-          core.setFailed('No valid release file to sign.');
+          throw new Error(`No valid release file to sign: ${releaseFilePath}`);
         }
 
         // 각 서명된 릴리스 파일을 별도의 변수와 출력으로 저장
@@ -310,11 +346,7 @@ async function signRun() {
       core.setFailed('No release files (.apk or .aab) could be found.');
     }
   } catch (error) {
-    if (error instanceof Error) {
-      core.setFailed(error.message);
-    } else {
-      core.setFailed('Unknown error occurred.');
-    }
+    core.setFailed(normalizeError(error).message);
   }
 }
 
@@ -327,10 +359,11 @@ async function getReleaseNotes(source: string, path: string | undefined, content
     try {
       return await fs.promises.readFile(path, 'utf8');
     } catch (error) {
-      logger.e(`Failed to read release notes file: ${path}. Error: ${error instanceof Error ? error.message : String(error)}`);
-      core.setFailed(`Failed to read release notes file: ${path}`);
-      return undefined;
+      logger.e(`Failed to read release notes file: ${path}. Error: ${normalizeError(error).message}`);
+      throw new Error(`Failed to read release notes file: ${path}: ${normalizeError(error).message}`);
     }
+  } else if (source === 'file') {
+    throw new Error("releaseNotesSource is 'file' but releaseNotesPath was not provided.");
   } else if (source === 'git-commits') {
     logger.d('Generating release notes from Git commits.');
     let output = '';
@@ -352,9 +385,8 @@ async function getReleaseNotes(source: string, path: string | undefined, content
       }
       return output.trim();
     } catch (err) {
-      logger.e(`Failed to get git commits: ${err instanceof Error ? err.message : String(err)}`);
-      core.setFailed(`Failed to generate release notes from git commits.`);
-      return undefined;
+      logger.e(`Failed to get git commits: ${normalizeError(err).message}`);
+      throw new Error(`Failed to generate release notes from git commits: ${normalizeError(err).message}`);
     }
   } else {
     logger.d('No release notes source specified or invalid source.');
@@ -363,6 +395,8 @@ async function getReleaseNotes(source: string, path: string | undefined, content
 }
 
 export const __testables = {
+  cleanupServiceAccountJsonFile,
+  normalizeError,
   validateServiceAccountJson,
   signRun,
   getReleaseNotes,

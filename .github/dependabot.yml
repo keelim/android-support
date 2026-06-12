@@ -11,3 +11,22 @@ updates:
     commit-message:
       prefix: 'deps'
       include: 'scope'
+    open-pull-requests-limit: 5
+    groups:
+      runtime-dependencies:
+        dependency-type: 'production'
+      development-dependencies:
+        dependency-type: 'development'
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'daily'
+    target-branch: 'main'
+    labels:
+      - 'dependencies'
+      - 'github-actions'
+      - 'dependabot'
+    commit-message:
+      prefix: 'deps'
+      include: 'scope'
+    open-pull-requests-limit: 5

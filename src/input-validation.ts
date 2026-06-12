@@ -63,7 +63,7 @@ export async function validateStatus(status: string | undefined, hasUserFraction
  */
 export async function validateInAppUpdatePriority(inAppUpdatePriority: number | undefined): Promise<void> {
   if (isNotNil(inAppUpdatePriority)) {
-    if (inAppUpdatePriority < 0 || inAppUpdatePriority > 5) {
+    if (!Number.isInteger(inAppUpdatePriority) || inAppUpdatePriority < 0 || inAppUpdatePriority > 5) {
       return Promise.reject(new Error('inAppUpdatePriority must be between 0 and 5, inclusive-inclusive'));
     }
   }
@@ -77,7 +77,7 @@ export async function validateInAppUpdatePriority(inAppUpdatePriority: number | 
  * @returns 존재하는 릴리스 파일 경로 배열
  */
 export async function validateReleaseFiles(releaseFiles: string[] | undefined): Promise<string[]> {
-  if (!releaseFiles) {
+  if (!releaseFiles || releaseFiles.length === 0 || releaseFiles.some(releaseFile => releaseFile.trim().length === 0)) {
     return Promise.reject(new Error(`You must provide 'releaseFiles' in your configuration`));
   } else {
     const files = await fg(releaseFiles);
