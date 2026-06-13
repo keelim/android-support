@@ -103,7 +103,6 @@ export async function signApkFile(
 
   // APK 파일 정렬
   const alignedApkFile = apkFile.replace('.apk', '-aligned.apk');
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   await exec(`"${zipAlign}"`, ['-c', '-v', '4', apkFile]);
   fs.copyFileSync(apkFile, alignedApkFile);
 
@@ -119,12 +118,10 @@ export async function signApkFile(
     args.push('--key-pass', `env:${KEY_PASSWORD_ENV}`);
   }
   args.push(alignedApkFile);
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   await exec(`"${apkSigner}"`, args, { env: buildSecretEnv(keyStorePassword, keyPassword) });
 
   // 서명 검증
   logger.d('Verifying Signed APK');
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   await exec(`"${apkSigner}"`, ['verify', signedApkFile]);
 
   return signedApkFile;
@@ -160,9 +157,7 @@ export async function signAabFile(
   args.push(aabFile, alias);
 
   // jarsigner로 서명
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   await exec(`"${jarSignerPath}"`, args, { env: buildSecretEnv(keyStorePassword, keyPassword) });
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   await exec(`"${jarSignerPath}"`, ['-verify', '-certs', '-verbose', aabFile]);
 
   return aabFile;

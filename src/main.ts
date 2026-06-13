@@ -9,7 +9,7 @@
 import * as core from '@actions/core';
 import * as fs from 'fs';
 import { runUpload } from './edits';
-import { validateInAppUpdatePriority, validateReleaseFiles, validateStatus, validateUserFraction } from './input-validation';
+import { toReleaseStatus, validateInAppUpdatePriority, validateReleaseFiles, validateStatus, validateUserFraction } from './input-validation';
 import { unlink, writeFile } from 'fs/promises';
 import pTimeout from 'p-timeout';
 import * as io from './utils/io-utils';
@@ -56,7 +56,7 @@ function parseStrictIntegerInput(value: string, inputName: string): number {
 }
 
 function requireInputValue(value: string, inputName: string): string {
-  if (!value) {
+  if (value.trim().length === 0) {
     throw new Error(`Missing required input '${inputName}'`);
   }
   return value;
@@ -64,6 +64,11 @@ function requireInputValue(value: string, inputName: string): string {
 
 function optionalInputValue(value: string): string | undefined {
   return value.length > 0 ? value : undefined;
+}
+
+function optionalCommaSeparatedInputValues(value: string): string[] | undefined {
+  const values = compact(value.split(',').map(item => item.trim()));
+  return values.length > 0 ? values : undefined;
 }
 
 async function cleanupServiceAccountJsonFile(filePath = generatedServiceAccountFile): Promise<void> {
@@ -122,7 +127,7 @@ export async function uploadRun() {
     const packageName = requireInputValue(core.getInput('packageName', { required: false }), 'packageName');
     const releaseFile = optionalInputValue(core.getInput('releaseFile', { required: false }));
     const releaseFilesInput = core.getInput('releaseFiles', { required: false });
-    const releaseFiles = releaseFilesInput ? compact(releaseFilesInput.split(',').map(value => value.trim())) : undefined;
+    const releaseFiles = optionalCommaSeparatedInputValues(releaseFilesInput);
     const releaseName = optionalInputValue(core.getInput('releaseName', { required: false }));
     const track = requireInputValue(core.getInput('track', { required: false }), 'track');
     const inAppUpdatePriority = core.getInput('inAppUpdatePriority', { required: false });
@@ -131,12 +136,12 @@ export async function uploadRun() {
     const whatsNewDir = optionalInputValue(core.getInput('whatsNewDirectory', { required: false }));
     const mappingFile = optionalInputValue(core.getInput('mappingFile', { required: false }));
     const debugSymbols = optionalInputValue(core.getInput('debugSymbols', { required: false }));
-    const changesNotSentForReview = core.getInput('changesNotSentForReview', { required: false }) == 'true';
+    const changesNotSentForReview = core.getBooleanInput('changesNotSentForReview', { required: false });
     const existingEditId = optionalInputValue(core.getInput('existingEditId'));
     const releaseNotesSource = core.getInput('releaseNotesSource', { required: false }) || 'none';
     const releaseNotesPath = optionalInputValue(core.getInput('releaseNotesPath', { required: false }));
     const releaseNotesContent = optionalInputValue(core.getInput('releaseNotes', { required: false }));
-    const dryRun = core.getInput('dryRun', { required: false }) == 'true';
+    const dryRun = core.getBooleanInput('dryRun', { required: false });
 
     logger.d('Starting app upload process with the following inputs:');
     logger.d(`  packageName: ${packageName}`);
@@ -184,7 +189,8 @@ export async function uploadRun() {
 
     // 릴리스 상태 검증
     logger.d(`Validating status: ${status}`);
-    await validateStatus(status, isNotNil(userFractionFloat) && !isNaN(userFractionFloat));
+    const releaseStatus = toReleaseStatus(status);
+    await validateStatus(releaseStatus, userFractionFloat !== undefined);
     logger.d('Status validated.');
 
     // 인앱 업데이트 우선순위 검증 (0-5 사이의 숫자)
@@ -203,7 +209,7 @@ export async function uploadRun() {
       logger.w(`WARNING!! 'releaseFile' is deprecated and will be removed in a future release. Please migrate to 'releaseFiles'`);
     }
     const releaseFileCandidates = releaseFiles ?? (releaseFile ? [releaseFile] : undefined);
-    logger.d(`Validating release files: ${releaseFileCandidates}`);
+    logger.d(`Validating release files: ${releaseFileCandidates?.join(', ') ?? 'undefined'}`);
     const validatedReleaseFiles: string[] = await validateReleaseFiles(releaseFileCandidates);
     logger.d(`Release files validated: ${validatedReleaseFiles.join(', ')}`);
 
@@ -242,21 +248,21 @@ export async function uploadRun() {
     // 업로드 실행 (3.6e+6ms = 1시간 타임아웃)
     logger.d('Initiating app upload.');
     await pTimeout(
-      runUpload(
+      runUpload({
         packageName,
         track,
-        inAppUpdatePriorityInt,
-        userFractionFloat,
+        inAppUpdatePriority: inAppUpdatePriorityInt,
+        userFraction: userFractionFloat,
         whatsNewDir,
         mappingFile,
         debugSymbols,
-        releaseName,
+        name: releaseName,
         changesNotSentForReview,
         existingEditId,
-        status,
-        validatedReleaseFiles,
-        releaseNotes
-      ),
+        status: releaseStatus,
+        releaseFiles: validatedReleaseFiles,
+        releaseNotes,
+      }),
       {
         milliseconds: 3.6e6,
       }
@@ -325,7 +331,7 @@ async function signRun() {
     const signingKeyBase64 = requireInputValue(core.getInput('signingKeyBase64'), 'signingKeyBase64');
     const alias = requireInputValue(core.getInput('alias'), 'alias');
     const keyStorePassword = requireInputValue(core.getInput('keyStorePassword'), 'keyStorePassword');
-    const keyPassword = core.getInput('keyPassword');
+    const keyPassword = optionalInputValue(core.getInput('keyPassword'));
 
     console.log(`Preparing to sign key @ ${safeBasenameForLog(releaseDir)} with signing key`);
 
@@ -366,9 +372,10 @@ async function signRun() {
       core.setOutput(`nofSignedReleaseFiles`, `${signedReleaseFiles.length}`);
 
       // 단일 서명된 릴리스 파일인 경우 특정 변수와 출력으로 저장
-      if (signedReleaseFiles.length == 1) {
-        core.exportVariable(`SIGNED_RELEASE_FILE`, signedReleaseFiles[0]);
-        core.setOutput('signedReleaseFile', signedReleaseFiles[0]);
+      const onlySignedReleaseFile = signedReleaseFiles.at(0);
+      if (signedReleaseFiles.length === 1 && onlySignedReleaseFile) {
+        core.exportVariable(`SIGNED_RELEASE_FILE`, onlySignedReleaseFile);
+        core.setOutput('signedReleaseFile', onlySignedReleaseFile);
       }
       console.log('Releases signed!');
     } else {

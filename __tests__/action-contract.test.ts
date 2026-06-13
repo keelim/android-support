@@ -4,7 +4,9 @@ function actionInputBlock(inputName: string): string {
   const action = readFileSync('action.yml', 'utf8');
   const match = action.match(new RegExp(`^  ${inputName}:\\n([\\s\\S]*?)(?=^  [A-Za-z][A-Za-z0-9_]*:|^outputs:)`, 'm'));
   if (!match) throw new Error(`Missing action input ${inputName}`);
-  return match[1];
+  const block = match[1];
+  if (!block) throw new Error(`Missing action input block ${inputName}`);
+  return block;
 }
 
 function mainSource(): string {

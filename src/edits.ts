@@ -23,6 +23,7 @@ import {
   resolveSecureFile,
   safeBasenameForLog,
 } from './utils/security-utils';
+import { ReleaseStatus } from './input-validation';
 
 import AndroidPublisher = androidpublisher_v3.Androidpublisher;
 import Apk = androidpublisher_v3.Schema$Apk;
@@ -30,6 +31,42 @@ import Bundle = androidpublisher_v3.Schema$Bundle;
 import Track = androidpublisher_v3.Schema$Track;
 import InternalAppSharingArtifact = androidpublisher_v3.Schema$InternalAppSharingArtifact;
 import LocalizedText = androidpublisher_v3.Schema$LocalizedText;
+
+type LiteralUnion<T extends U, U = string> = T | (U & Record<never, never>);
+
+export type ReleaseTrack = LiteralUnion<'internalsharing' | 'production' | 'beta' | 'alpha' | 'internal', string>;
+
+export interface RunUploadOptions {
+  packageName: string;
+  track: ReleaseTrack;
+  inAppUpdatePriority: number | undefined;
+  userFraction: number | undefined;
+  whatsNewDir: string | undefined;
+  mappingFile: string | undefined;
+  debugSymbols: string | undefined;
+  name: string | undefined;
+  changesNotSentForReview: boolean;
+  existingEditId: string | undefined;
+  status: ReleaseStatus;
+  releaseFiles: string[];
+  releaseNotes: LocalizedText[] | undefined;
+}
+
+type UploadToPlayStoreResult =
+  | {
+      kind: 'edit';
+      editId: string;
+    }
+  | {
+      kind: 'internalsharing';
+      downloadUrls: string[];
+    };
+
+interface GoogleApiResponse<T> {
+  status?: number;
+  statusText?: string;
+  data?: T;
+}
 
 const androidPublisher: AndroidPublisher = google.androidpublisher('v3');
 const GOOGLE_API_TIMEOUT_MS = 10 * 60 * 1000;
@@ -43,6 +80,31 @@ const MAX_DEBUG_SYMBOL_DEPTH = 16;
 
 function normalizeError(error: unknown): Error {
   return normalizeUnknownError(error);
+}
+
+function formatResponseContext(context: Record<string, unknown>): string {
+  return Object.entries(context)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(', ');
+}
+
+function assertSuccessfulResponseStatus<T>(operation: string, context: Record<string, unknown>, res: GoogleApiResponse<T>): void {
+  if (res.status === undefined || (res.status >= 200 && res.status < 300)) {
+    return;
+  }
+
+  const details = [formatResponseContext(context), `status=${res.status}`, `statusText=${res.statusText}`].filter(Boolean).join(', ');
+  throw new Error(`${operation} failed (${details})`);
+}
+
+function requireResponseData<T>(operation: string, context: Record<string, unknown>, res: GoogleApiResponse<T>): T {
+  assertSuccessfulResponseStatus(operation, context, res);
+  if (res.data !== undefined && res.data !== null) {
+    return res.data;
+  }
+
+  throw new Error(`${operation} response missing data (${formatResponseContext(context)})`);
 }
 
 function isRetryableError(error: unknown): boolean {
@@ -102,14 +164,14 @@ function assertPositiveVersionCode(versionCode: unknown, artifactType: string, r
 export interface EditOptions {
   auth: GoogleAuth; // Google 인증 객체
   applicationId: string; // 앱 패키지 ID
-  track: string; // 릴리스 트랙
+  track: ReleaseTrack; // 릴리스 트랙
   inAppUpdatePriority: number; // 인앱 업데이트 우선순위
   userFraction?: number; // 점진적 출시 비율
   whatsNewDir?: string; // 릴리스 노트 디렉토리
   mappingFile?: string; // ProGuard 매핑 파일
   debugSymbols?: string; // 디버그 심볼 파일
   name?: string; // 릴리스 이름
-  status: string; // 릴리스 상태
+  status: ReleaseStatus; // 릴리스 상태
   changesNotSentForReview?: boolean; // 리뷰 없이 변경사항 적용 여부
   existingEditId?: string; // 기존 편집 ID
   releaseNotes?: LocalizedText[]; // 릴리스 노트
@@ -119,21 +181,7 @@ export interface EditOptions {
  * 앱 업로드 실행 함수
  * Google Play Console에 앱을 업로드하고 릴리스 정보를 설정
  */
-export async function runUpload(
-  packageName: string,
-  track: string,
-  inAppUpdatePriority: number | undefined,
-  userFraction: number | undefined,
-  whatsNewDir: string | undefined,
-  mappingFile: string | undefined,
-  debugSymbols: string | undefined,
-  name: string | undefined,
-  changesNotSentForReview: boolean,
-  existingEditId: string | undefined,
-  status: string,
-  validatedReleaseFiles: string[],
-  releaseNotes: LocalizedText[] | undefined
-) {
+export async function runUpload(options: RunUploadOptions): Promise<void> {
   const auth = new google.auth.GoogleAuth({
     scopes: ['https://www.googleapis.com/auth/androidpublisher'],
   });
@@ -141,24 +189,24 @@ export async function runUpload(
   const result = await uploadToPlayStore(
     {
       auth: auth,
-      applicationId: packageName,
-      track: track,
-      inAppUpdatePriority: inAppUpdatePriority || 0,
-      userFraction: userFraction,
-      whatsNewDir: whatsNewDir,
-      mappingFile: mappingFile,
-      debugSymbols: debugSymbols,
-      name: name,
-      changesNotSentForReview: changesNotSentForReview,
-      existingEditId: existingEditId,
-      status: status,
-      releaseNotes: releaseNotes,
+      applicationId: options.packageName,
+      track: options.track,
+      inAppUpdatePriority: options.inAppUpdatePriority ?? 0,
+      userFraction: options.userFraction,
+      whatsNewDir: options.whatsNewDir,
+      mappingFile: options.mappingFile,
+      debugSymbols: options.debugSymbols,
+      name: options.name,
+      changesNotSentForReview: options.changesNotSentForReview,
+      existingEditId: options.existingEditId,
+      status: options.status,
+      releaseNotes: options.releaseNotes,
     },
-    validatedReleaseFiles
+    options.releaseFiles
   );
 
-  if (result) {
-    console.log(`Finished uploading to the Play Store: ${result}`);
+  if (result.kind === 'edit') {
+    console.log(`Finished uploading to the Play Store: ${result.editId}`);
   }
 }
 
@@ -166,7 +214,7 @@ export async function runUpload(
  * Google Play Store 업로드 함수
  * 내부 공유 또는 일반 트랙에 따라 적절한 업로드 방식 선택
  */
-async function uploadToPlayStore(options: EditOptions, releaseFiles: string[]): Promise<string | void> {
+async function uploadToPlayStore(options: EditOptions, releaseFiles: string[]): Promise<UploadToPlayStoreResult> {
   if (releaseFiles.length === 0) {
     throw new Error('At least one release file is required for upload.');
   }
@@ -176,13 +224,14 @@ async function uploadToPlayStore(options: EditOptions, releaseFiles: string[]): 
   // 내부 공유 트랙인 경우 특별한 업로드 API 사용
   if (options.track === 'internalsharing') {
     logger.d('Track is Internal app sharing, switch to special upload api');
+    let lastDownloadUrl = '';
     for (const releaseFile of releaseFiles) {
       logger.d(`Uploading ${releaseFile}`);
       const url = await uploadInternalSharingRelease(options, releaseFile);
+      lastDownloadUrl = url;
       internalSharingDownloadUrls.push(url);
     }
 
-    const lastDownloadUrl = internalSharingDownloadUrls[internalSharingDownloadUrls.length - 1];
     core.setOutput('internalSharingDownloadUrl', lastDownloadUrl);
     core.exportVariable('INTERNAL_SHARING_DOWNLOAD_URL', lastDownloadUrl);
   } else {
@@ -224,11 +273,12 @@ async function uploadToPlayStore(options: EditOptions, releaseFiles: string[]): 
             changesNotSentForReview: options.changesNotSentForReview,
           })
       );
+      const data = requireResponseData('edits.commit', { packageName: options.applicationId, editId: appEditId, track: options.track }, res);
 
       // 커밋 성공 여부 확인
-      if (res.data.id) {
-        logger.i(`Successfully committed ${res.data.id}`);
-        return res.data.id;
+      if (data.id) {
+        logger.i(`Successfully committed ${data.id}`);
+        return { kind: 'edit', editId: data.id };
       }
 
       throw new Error(
@@ -249,6 +299,7 @@ async function uploadToPlayStore(options: EditOptions, releaseFiles: string[]): 
   const serializedDownloadUrls = JSON.stringify(internalSharingDownloadUrls);
   core.setOutput('internalSharingDownloadUrls', serializedDownloadUrls);
   core.exportVariable('INTERNAL_SHARING_DOWNLOAD_URLS', serializedDownloadUrls);
+  return { kind: 'internalsharing', downloadUrls: internalSharingDownloadUrls };
 }
 
 /**
@@ -304,20 +355,21 @@ async function validateSelectedTrack(appEditId: string, options: EditOptions): P
   );
 
   // 200 상태 코드가 아닌 경우 오류 전파
-  if (res.status != 200) {
+  if (res.status !== 200) {
     throw Error(
       `Failed to list tracks (packageName=${options.applicationId}, editId=${appEditId}, requestedTrack=${options.track}, status=${res.status}, statusText=${res.statusText})`
     );
   }
 
-  const allTracks = res.data.tracks;
+  const data = requireResponseData('tracks.list', { packageName: options.applicationId, editId: appEditId, track: options.track }, res);
+  const allTracks = data.tracks;
   // 트랙이 있는지 확인
   if (!allTracks) {
     throw Error('No tracks found, unable to validate track.');
   }
 
   // 트랙이 유효한지 확인
-  if (allTracks.find(value => value.track == options.track) == undefined) {
+  if (allTracks.find(value => value.track === options.track) === undefined) {
     const allTrackNames = allTracks.map(track => {
       return track.track;
     });
@@ -368,15 +420,10 @@ async function addReleasesToTrack(appEditId: string, options: EditOptions, versi
       },
     })
   );
+  const responseData = requireResponseData('tracks.update', { packageName: options.applicationId, editId: appEditId, track: options.track }, res);
 
-  if (res.status !== undefined && (res.status < 200 || res.status >= 300)) {
-    throw new Error(
-      `tracks.update failed (packageName=${options.applicationId}, editId=${appEditId}, track=${options.track}, status=${res.status}, statusText=${res.statusText})`
-    );
-  }
-
-  const returnedTrack = res.data.track;
-  const returnedVersionCodes = res.data.releases?.flatMap(release => release.versionCodes ?? []) ?? [];
+  const returnedTrack = responseData.track;
+  const returnedVersionCodes = responseData.releases?.flatMap(release => release.versionCodes ?? []) ?? [];
   const missingVersionCodes = requestedVersionCodes.filter(versionCode => !returnedVersionCodes.includes(versionCode));
   if (returnedTrack !== options.track || returnedVersionCodes.length === 0 || missingVersionCodes.length > 0) {
     throw new Error(
@@ -384,7 +431,7 @@ async function addReleasesToTrack(appEditId: string, options: EditOptions, versi
     );
   }
 
-  return res.data;
+  return responseData;
 }
 
 function preflightReleaseArtifacts(options: EditOptions, releaseFiles: string[]) {
@@ -457,7 +504,7 @@ async function uploadMappingFile(appEditId: string, versionCode: number, options
       logger.d(
         `[${appEditId}, versionCode=${versionCode}, packageName=${options.applicationId}]: Uploading Proguard mapping file @ ${safeBasenameForLog(mappingFile)}`
       );
-      await withGoogleApiGuard(
+      const res = await withGoogleApiGuard(
         'deobfuscationfiles.upload.mapping',
         { packageName: options.applicationId, editId: appEditId, versionCode, mappingFile },
         () =>
@@ -473,6 +520,12 @@ async function uploadMappingFile(appEditId: string, versionCode: number, options
             },
           })
       );
+      assertSuccessfulResponseStatus('deobfuscationfiles.upload.mapping', {
+        packageName: options.applicationId,
+        editId: appEditId,
+        versionCode,
+        mappingFile,
+      }, res);
     }
   }
 }
@@ -498,7 +551,7 @@ async function uploadDebugSymbolsFile(appEditId: string, versionCode: number, op
       logger.d(
         `[${appEditId}, versionCode=${versionCode}, packageName=${options.applicationId}]: Uploading Debug Symbols file @ ${safeBasenameForLog(debugSymbols.path)}`
       );
-      await withGoogleApiGuard(
+      const res = await withGoogleApiGuard(
         'deobfuscationfiles.upload.debugSymbols',
         { packageName: options.applicationId, editId: appEditId, versionCode, debugSymbols: safeBasenameForLog(debugSymbols.path) },
         () =>
@@ -514,6 +567,12 @@ async function uploadDebugSymbolsFile(appEditId: string, versionCode: number, op
             },
           })
       );
+      assertSuccessfulResponseStatus('deobfuscationfiles.upload.debugSymbols', {
+        packageName: options.applicationId,
+        editId: appEditId,
+        versionCode,
+        debugSymbols: safeBasenameForLog(debugSymbols.path),
+      }, res);
     }
   }
 }
@@ -604,7 +663,7 @@ async function internalSharingUploadApk(options: EditOptions, apkReleaseFile: st
       },
     })
   );
-  return res.data;
+  return requireResponseData('internalappsharingartifacts.uploadapk', { packageName: options.applicationId, releaseFile: apkReleaseFile }, res);
 }
 
 /**
@@ -626,7 +685,7 @@ async function internalSharingUploadBundle(options: EditOptions, bundleReleaseFi
         },
       })
   );
-  return res.data;
+  return requireResponseData('internalappsharingartifacts.uploadbundle', { packageName: options.applicationId, releaseFile: bundleReleaseFile }, res);
 }
 
 /**
@@ -646,7 +705,7 @@ async function uploadApk(appEditId: string, options: EditOptions, apkReleaseFile
       },
     })
   );
-  return res.data;
+  return requireResponseData('apks.upload', { packageName: options.applicationId, editId: appEditId, releaseFile: apkReleaseFile }, res);
 }
 
 /**
@@ -666,7 +725,7 @@ async function uploadBundle(appEditId: string, options: EditOptions, bundleRelea
       },
     })
   );
-  return res.data;
+  return requireResponseData('bundles.upload', { packageName: options.applicationId, editId: appEditId, releaseFile: bundleReleaseFile }, res);
 }
 
 /**
@@ -686,10 +745,11 @@ async function getOrCreateEdit(options: EditOptions): Promise<string> {
       packageName: options.applicationId,
     })
   );
+  const data = requireResponseData('edits.insert', { packageName: options.applicationId }, res);
 
-  if (res.data.id) {
-    logger.d(`Created edit with id: ${res.data.id}`);
-    return res.data.id;
+  if (data.id) {
+    logger.d(`Created edit with id: ${data.id}`);
+    return data.id;
   } else {
     throw Error(
       `Failed to create an edit (packageName=${options.applicationId}, status=${res.status}, statusText=${res.statusText})`

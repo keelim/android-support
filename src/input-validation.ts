@@ -5,6 +5,21 @@
 import fg from 'fast-glob';
 import { isNotNil } from 'es-toolkit/predicate';
 
+export const RELEASE_STATUSES = ['completed', 'inProgress', 'halted', 'draft'] as const;
+export type ReleaseStatus = (typeof RELEASE_STATUSES)[number];
+
+function isReleaseStatus(status: string | undefined): status is ReleaseStatus {
+  return RELEASE_STATUSES.includes(status as ReleaseStatus);
+}
+
+export function toReleaseStatus(status: string | undefined): ReleaseStatus {
+  if (isReleaseStatus(status)) {
+    return status;
+  }
+
+  throw new Error(`Invalid status provided! Must be one of 'completed', 'inProgress', 'halted', 'draft'. Got ${status ?? 'undefined'}`);
+}
+
 /**
  * 사용자 분수(userFraction) 검증
  * 점진적 출시를 위한 사용자 비율이 0과 1 사이의 숫자인지 확인
@@ -31,25 +46,20 @@ export async function validateUserFraction(userFraction: number | undefined): Pr
  * @param hasUserFraction - userFraction이 설정되어 있는지 여부
  */
 export async function validateStatus(status: string | undefined, hasUserFraction: boolean): Promise<void> {
-  // 상태값이 설정된 경우 기본 검증 수행
-  if (status != 'completed' && status != 'inProgress' && status != 'halted' && status != 'draft') {
-    return Promise.reject(
-      new Error(`Invalid status provided! Must be one of 'completed', 'inProgress', 'halted', 'draft'. Got ${status ?? 'undefined'}`)
-    );
-  }
+  const releaseStatus = toReleaseStatus(status);
 
   // 상태에 따른 userFraction 호환성 검증
-  switch (status) {
+  switch (releaseStatus) {
     case 'completed':
     case 'draft':
       if (hasUserFraction) {
-        return Promise.reject(new Error(`Status '${status}' does not support 'userFraction'`));
+        return Promise.reject(new Error(`Status '${releaseStatus}' does not support 'userFraction'`));
       }
       break;
     case 'halted':
     case 'inProgress':
       if (!hasUserFraction) {
-        return Promise.reject(new Error(`Status '${status}' requires a 'userFraction' to be set`));
+        return Promise.reject(new Error(`Status '${releaseStatus}' requires a 'userFraction' to be set`));
       }
       break;
   }

@@ -1,5 +1,6 @@
 jest.mock('@actions/core', () => ({
   getInput: jest.fn(),
+  getBooleanInput: jest.fn(),
   setFailed: jest.fn(),
   exportVariable: jest.fn(),
   setOutput: jest.fn(),
@@ -35,6 +36,12 @@ jest.mock('../src/edits', () => ({
 }));
 
 jest.mock('../src/input-validation', () => ({
+  toReleaseStatus: jest.fn((status: string | undefined) => {
+    if (status === 'completed' || status === 'inProgress' || status === 'halted' || status === 'draft') {
+      return status;
+    }
+    throw new Error(`Invalid status provided! Must be one of 'completed', 'inProgress', 'halted', 'draft'. Got ${status ?? 'undefined'}`);
+  }),
   validateInAppUpdatePriority: jest.fn(),
   validateReleaseFiles: jest.fn(),
   validateStatus: jest.fn(),
@@ -100,6 +107,7 @@ function fileStat(overrides: Partial<{ isDirectory: () => boolean; isFile: () =>
 
 function setInputs(inputs: InputMap) {
   (core.getInput as jest.Mock).mockImplementation((name: string) => inputs[name] ?? '');
+  (core.getBooleanInput as jest.Mock).mockImplementation((name: string) => (inputs[name] ?? '').toLowerCase() === 'true');
 }
 
 describe('main module', () => {
@@ -237,21 +245,21 @@ describe('main module', () => {
       expect(validateUserFraction).toHaveBeenCalledWith(0.5);
       expect(validateStatus).toHaveBeenCalledWith('inProgress', true);
       expect(validateInAppUpdatePriority).toHaveBeenCalledWith(3);
-      expect(runUploadEdit).toHaveBeenCalledWith(
-        'com.app',
-        'production',
-        3,
-        0.5,
-        './__tests__/whatsnew',
-        './mapping.txt',
-        './symbols.zip',
-        'Release Name',
-        true,
-        'edit-123',
-        'inProgress',
-        ['./__tests__/releasefiles/release.aab'],
-        [{ language: 'en-US', text: 'inline release notes' }]
-      );
+      expect(runUploadEdit).toHaveBeenCalledWith({
+        packageName: 'com.app',
+        track: 'production',
+        inAppUpdatePriority: 3,
+        userFraction: 0.5,
+        whatsNewDir: './__tests__/whatsnew',
+        mappingFile: './mapping.txt',
+        debugSymbols: './symbols.zip',
+        name: 'Release Name',
+        changesNotSentForReview: true,
+        existingEditId: 'edit-123',
+        status: 'inProgress',
+        releaseFiles: ['./__tests__/releasefiles/release.aab'],
+        releaseNotes: [{ language: 'en-US', text: 'inline release notes' }],
+      });
       expect(logger.w).toHaveBeenCalledWith(
         "WARNING!! 'releaseFile' is deprecated and will be removed in a future release. Please migrate to 'releaseFiles'"
       );
@@ -331,21 +339,21 @@ describe('main module', () => {
       await uploadRun();
 
       expect(readLocalizedReleaseNotes).toHaveBeenCalledWith('./__tests__/whatsnew');
-      expect(runUploadEdit).toHaveBeenCalledWith(
-        'com.app',
-        'production',
-        undefined,
-        undefined,
-        './__tests__/whatsnew',
-        undefined,
-        undefined,
-        undefined,
-        false,
-        undefined,
-        'completed',
-        ['./__tests__/releasefiles/release.aab'],
-        [{ language: 'en-US', text: 'localized' }]
-      );
+      expect(runUploadEdit).toHaveBeenCalledWith({
+        packageName: 'com.app',
+        track: 'production',
+        inAppUpdatePriority: undefined,
+        userFraction: undefined,
+        whatsNewDir: './__tests__/whatsnew',
+        mappingFile: undefined,
+        debugSymbols: undefined,
+        name: undefined,
+        changesNotSentForReview: false,
+        existingEditId: undefined,
+        status: 'completed',
+        releaseFiles: ['./__tests__/releasefiles/release.aab'],
+        releaseNotes: [{ language: 'en-US', text: 'localized' }],
+      });
     });
 
     test('trims and removes empty releaseFiles entries before validation', async () => {
@@ -360,6 +368,21 @@ describe('main module', () => {
       await uploadRun();
 
       expect(validateReleaseFiles).toHaveBeenCalledWith(['./__tests__/releasefiles/release.aab', './__tests__/releasefiles/release.apk']);
+    });
+
+    test('falls back to deprecated releaseFile when releaseFiles contains only separators', async () => {
+      setInputs({
+        serviceAccountJson: '/tmp/service-account.json',
+        packageName: 'com.app',
+        releaseFile: './__tests__/releasefiles/release.aab',
+        releaseFiles: ' , , ',
+        track: 'production',
+        status: 'completed',
+      });
+
+      await uploadRun();
+
+      expect(validateReleaseFiles).toHaveBeenCalledWith(['./__tests__/releasefiles/release.aab']);
     });
 
     test('reports missing release files before upload', async () => {

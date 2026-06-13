@@ -38,6 +38,14 @@ import * as logger from '../src/utils/logger';
 import { signAabFile, signApkFile } from '../src/signing';
 import fs from 'fs';
 
+function expectExecEnv(callNumber: number, expectedEnv: Record<string, string>): void {
+  const call = (exec as jest.MockedFunction<typeof exec>).mock.calls[callNumber - 1];
+  if (!call) {
+    throw new Error(`Expected exec call ${callNumber} to exist`);
+  }
+  expect(call[2]?.env).toEqual(expect.objectContaining(expectedEnv));
+}
+
 describe('signing', () => {
   const originalAndroidHome = process.env.ANDROID_HOME;
   const originalBuildToolsVersion = process.env.BUILD_TOOLS_VERSION;
@@ -83,13 +91,12 @@ describe('signing', () => {
         'env:ANDROID_SUPPORT_KEY_PASSWORD',
         '/tmp/app-aligned.apk',
       ],
-      expect.objectContaining({
-        env: expect.objectContaining({
-          ANDROID_SUPPORT_KEYSTORE_PASSWORD: 'storepass',
-          ANDROID_SUPPORT_KEY_PASSWORD: 'keypass',
-        }),
-      })
+      expect.any(Object)
     );
+    expectExecEnv(2, {
+      ANDROID_SUPPORT_KEYSTORE_PASSWORD: 'storepass',
+      ANDROID_SUPPORT_KEY_PASSWORD: 'keypass',
+    });
     expect(exec).toHaveBeenNthCalledWith(3, '"/android-sdk/build-tools/35.0.0/apksigner"', ['verify', '/tmp/app-signed.apk']);
     expect(fs.copyFileSync).toHaveBeenCalledWith('/tmp/app.apk', '/tmp/app-aligned.apk');
     expect(core.setSecret).toHaveBeenCalledWith('storepass');
@@ -153,12 +160,11 @@ describe('signing', () => {
       1,
       '"/jdk/bin/jarsigner"',
       ['-keystore', '/tmp/key.jks', '-storepass:env', 'ANDROID_SUPPORT_KEYSTORE_PASSWORD', '/tmp/app.aab', 'alias'],
-      expect.objectContaining({
-        env: expect.objectContaining({
-          ANDROID_SUPPORT_KEYSTORE_PASSWORD: 'storepass',
-        }),
-      })
+      expect.any(Object)
     );
+    expectExecEnv(1, {
+      ANDROID_SUPPORT_KEYSTORE_PASSWORD: 'storepass',
+    });
     expect(exec).toHaveBeenNthCalledWith(2, '"/jdk/bin/jarsigner"', ['-verify', '-certs', '-verbose', '/tmp/app.aab']);
 
     await expect(signAabFile('/tmp/app2.aab', '/tmp/key.jks', 'alias', 'storepass', 'keypass')).resolves.toBe('/tmp/app2.aab');
@@ -175,13 +181,12 @@ describe('signing', () => {
         '/tmp/app2.aab',
         'alias',
       ],
-      expect.objectContaining({
-        env: expect.objectContaining({
-          ANDROID_SUPPORT_KEYSTORE_PASSWORD: 'storepass',
-          ANDROID_SUPPORT_KEY_PASSWORD: 'keypass',
-        }),
-      })
+      expect.any(Object)
     );
+    expectExecEnv(3, {
+      ANDROID_SUPPORT_KEYSTORE_PASSWORD: 'storepass',
+      ANDROID_SUPPORT_KEY_PASSWORD: 'keypass',
+    });
     expect(exec).toHaveBeenNthCalledWith(4, '"/jdk/bin/jarsigner"', ['-verify', '-certs', '-verbose', '/tmp/app2.aab']);
   });
 

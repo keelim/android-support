@@ -142,21 +142,21 @@ describe('edits module', () => {
   });
 
   test('runUpload logs completed edit id when commit succeeds', async () => {
-    await runUpload(
-      'com.example.app',
-      'production',
-      3,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      undefined,
-      'completed',
-      ['app.aab'],
-      undefined
-    );
+    await runUpload({
+      packageName: 'com.example.app',
+      track: 'production',
+      inAppUpdatePriority: 3,
+      userFraction: undefined,
+      whatsNewDir: undefined,
+      mappingFile: undefined,
+      debugSymbols: undefined,
+      name: undefined,
+      changesNotSentForReview: false,
+      existingEditId: undefined,
+      status: 'completed',
+      releaseFiles: ['app.aab'],
+      releaseNotes: undefined,
+    });
 
     expect(googleAuthCtor).toHaveBeenCalledWith({
       scopes: ['https://www.googleapis.com/auth/androidpublisher'],
@@ -165,42 +165,42 @@ describe('edits module', () => {
   });
 
   test('runUpload handles internalsharing track without final edit id log', async () => {
-    await runUpload(
-      'com.example.app',
-      'internalsharing',
-      3,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      undefined,
-      'completed',
-      ['artifact.apk', 'artifact.aab'],
-      undefined
-    );
+    await runUpload({
+      packageName: 'com.example.app',
+      track: 'internalsharing',
+      inAppUpdatePriority: 3,
+      userFraction: undefined,
+      whatsNewDir: undefined,
+      mappingFile: undefined,
+      debugSymbols: undefined,
+      name: undefined,
+      changesNotSentForReview: false,
+      existingEditId: undefined,
+      status: 'completed',
+      releaseFiles: ['artifact.apk', 'artifact.aab'],
+      releaseNotes: undefined,
+    });
 
     expect(core.setOutput).toHaveBeenCalledWith('internalSharingDownloadUrls', '["https://download/apk","https://download/aab"]');
     expect(core.exportVariable).toHaveBeenCalledWith('INTERNAL_SHARING_DOWNLOAD_URLS', '["https://download/apk","https://download/aab"]');
   });
 
   test('runUpload defaults inAppUpdatePriority to zero when undefined', async () => {
-    await runUpload(
-      'com.example.app',
-      'production',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      undefined,
-      'completed',
-      ['app.aab'],
-      undefined
-    );
+    await runUpload({
+      packageName: 'com.example.app',
+      track: 'production',
+      inAppUpdatePriority: undefined,
+      userFraction: undefined,
+      whatsNewDir: undefined,
+      mappingFile: undefined,
+      debugSymbols: undefined,
+      name: undefined,
+      changesNotSentForReview: false,
+      existingEditId: undefined,
+      status: 'completed',
+      releaseFiles: ['app.aab'],
+      releaseNotes: undefined,
+    });
 
     expect(lastTrackUpdateRequest().requestBody.releases).toMatchObject([{ inAppUpdatePriority: 0 }]);
   });
@@ -210,7 +210,7 @@ describe('edits module', () => {
       mockAndroidPublisher.edits.commit.mockResolvedValueOnce({ data: {}, status: 500, statusText: 'FAIL' });
 
       await expect(__testables.uploadToPlayStore(options(), ['app.aab'])).rejects.toThrow(
-        'Commit response missing edit id (packageName=com.example.app, editId=new-edit, track=production, status=500, statusText=FAIL)'
+        'edits.commit failed (packageName=com.example.app, editId=new-edit, track=production, status=500, statusText=FAIL)'
       );
       expect(core.setFailed).not.toHaveBeenCalled();
       expect(mockAndroidPublisher.edits.delete).toHaveBeenCalledWith(
@@ -225,7 +225,16 @@ describe('edits module', () => {
       mockAndroidPublisher.edits.commit.mockResolvedValueOnce({ data: {}, status: 500, statusText: 'FAIL' });
       mockAndroidPublisher.edits.delete.mockRejectedValue(new Error('delete unavailable'));
 
-      await expect(__testables.uploadToPlayStore(options(), ['app.aab'])).rejects.toThrow('Commit response missing edit id');
+      await expect(__testables.uploadToPlayStore(options(), ['app.aab'])).rejects.toThrow('edits.commit failed');
+      expect(mockAndroidPublisher.edits.delete).toHaveBeenCalled();
+    });
+
+    test('rejects successful commit responses that omit the edit id', async () => {
+      mockAndroidPublisher.edits.commit.mockResolvedValueOnce({ data: {}, status: 200, statusText: 'OK' });
+
+      await expect(__testables.uploadToPlayStore(options(), ['app.aab'])).rejects.toThrow(
+        'Commit response missing edit id (packageName=com.example.app, editId=new-edit, track=production, status=200, statusText=OK)'
+      );
       expect(mockAndroidPublisher.edits.delete).toHaveBeenCalled();
     });
 
@@ -703,6 +712,14 @@ describe('edits module', () => {
       mockAndroidPublisher.edits.apks.upload.mockRejectedValue(new Error('apk upload failed'));
 
       await expect(__testables.uploadApk('edit-1', options(), 'app.apk')).rejects.toThrow('apks.upload failed');
+    });
+
+    test('rejects apk upload responses that omit data', async () => {
+      mockAndroidPublisher.edits.apks.upload.mockResolvedValueOnce({ status: 200, statusText: 'OK' });
+
+      await expect(__testables.uploadApk('edit-1', options(), 'app.apk')).rejects.toThrow(
+        'apks.upload response missing data (packageName=com.example.app, editId=edit-1, releaseFile=app.apk)'
+      );
     });
 
     test('wraps rejected bundle upload promises', async () => {
