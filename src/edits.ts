@@ -4,7 +4,7 @@
  */
 import * as core from '@actions/core';
 import * as fs from 'fs';
-import { lstatSync, readFileSync } from 'fs';
+import { readFileSync } from 'fs';
 import JSZip from 'jszip';
 import { Readable } from 'stream';
 
@@ -15,6 +15,14 @@ import { readLocalizedReleaseNotes } from './whatsnew';
 import * as logger from './utils/logger';
 import path = require('path');
 import { without } from 'es-toolkit/array';
+import {
+  assertPathInsideAllowedRoots,
+  assertPathInsideRoot,
+  normalizeUnknownError,
+  resolveSecureDirectory,
+  resolveSecureFile,
+  safeBasenameForLog,
+} from './utils/security-utils';
 
 import AndroidPublisher = androidpublisher_v3.Androidpublisher;
 import Apk = androidpublisher_v3.Schema$Apk;
@@ -26,10 +34,15 @@ import LocalizedText = androidpublisher_v3.Schema$LocalizedText;
 const androidPublisher: AndroidPublisher = google.androidpublisher('v3');
 const GOOGLE_API_TIMEOUT_MS = 10 * 60 * 1000;
 const GOOGLE_API_RETRY_ATTEMPTS = 3;
+const MAX_MAPPING_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_DEBUG_SYMBOL_ZIP_BYTES = 512 * 1024 * 1024;
+const MAX_DEBUG_SYMBOL_FILE_BYTES = 512 * 1024 * 1024;
+const MAX_DEBUG_SYMBOL_TOTAL_BYTES = 1024 * 1024 * 1024;
+const MAX_DEBUG_SYMBOL_FILES = 10000;
+const MAX_DEBUG_SYMBOL_DEPTH = 16;
 
 function normalizeError(error: unknown): Error {
-  if (error instanceof Error) return error;
-  return new Error(String(error));
+  return normalizeUnknownError(error);
 }
 
 function isRetryableError(error: unknown): boolean {
@@ -374,32 +387,62 @@ async function addReleasesToTrack(appEditId: string, options: EditOptions, versi
   return res.data;
 }
 
-function assertReadableFile(filePath: string, label: string) {
-  try {
-    fs.accessSync(filePath, fs.constants.R_OK);
-  } catch (error: unknown) {
-    throw new Error(`Unable to read ${label} file ${filePath}: ${normalizeError(error).message}`);
-  }
-}
-
-function assertReadablePath(filePath: string, label: string) {
-  try {
-    fs.accessSync(filePath, fs.constants.R_OK);
-  } catch (error: unknown) {
-    throw new Error(`Unable to read ${label} path ${filePath}: ${normalizeError(error).message}`);
-  }
-}
-
 function preflightReleaseArtifacts(options: EditOptions, releaseFiles: string[]) {
   for (const releaseFile of releaseFiles) {
-    assertReadableFile(releaseFile, 'release artifact');
+    resolveReleaseArtifactFile(releaseFile, 'release artifact');
   }
   if (options.mappingFile) {
-    assertReadableFile(options.mappingFile, 'mapping');
+    resolveMappingFilePath(options.mappingFile);
   }
   if (options.debugSymbols) {
-    assertReadablePath(options.debugSymbols, 'debugSymbols');
+    resolveDebugSymbolsPath(options.debugSymbols);
   }
+}
+
+function resolveReleaseArtifactFile(filePath: string, label: string): string {
+  return resolveSecureFile(filePath, label, {
+    extensions: ['.apk', '.aab'],
+  });
+}
+
+function resolveMappingFilePath(mappingFile: string): string {
+  return resolveSecureFile(mappingFile, 'mappingFile', {
+    extensions: ['.txt', '.map'],
+    maxBytes: MAX_MAPPING_FILE_BYTES,
+  });
+}
+
+function resolveDebugSymbolsPath(debugSymbols: string): { kind: 'directory' | 'file'; path: string } {
+  const absolutePath = path.resolve(debugSymbols);
+  let stats: fs.Stats;
+  try {
+    stats = fs.lstatSync(absolutePath);
+  } catch (error: unknown) {
+    throw new Error(`Unable to inspect debugSymbols ${safeBasenameForLog(debugSymbols)}: ${normalizeError(error).message}`);
+  }
+
+  if (stats.isSymbolicLink()) {
+    throw new Error(`debugSymbols must not be a symbolic link: ${safeBasenameForLog(debugSymbols)}`);
+  }
+
+  const realPath = fs.realpathSync(absolutePath);
+  assertPathInsideAllowedRoots(realPath, 'debugSymbols');
+
+  if (stats.isDirectory()) {
+    return { kind: 'directory', path: resolveSecureDirectory(debugSymbols, 'debugSymbols') };
+  }
+
+  if (stats.isFile()) {
+    return {
+      kind: 'file',
+      path: resolveSecureFile(debugSymbols, 'debugSymbols', {
+        extensions: ['.zip'],
+        maxBytes: MAX_DEBUG_SYMBOL_ZIP_BYTES,
+      }),
+    };
+  }
+
+  throw new Error(`debugSymbols must be a regular .zip file or directory: ${safeBasenameForLog(debugSymbols)}`);
 }
 
 /**
@@ -408,11 +451,11 @@ function preflightReleaseArtifacts(options: EditOptions, releaseFiles: string[])
  */
 async function uploadMappingFile(appEditId: string, versionCode: number, options: EditOptions) {
   if (options.mappingFile != undefined && options.mappingFile.length > 0) {
-    const mappingFile = options.mappingFile;
+    const mappingFile = resolveMappingFilePath(options.mappingFile);
     const mapping = readFileSync(mappingFile, 'utf-8');
     if (mapping != undefined) {
       logger.d(
-        `[${appEditId}, versionCode=${versionCode}, packageName=${options.applicationId}]: Uploading Proguard mapping file @ ${mappingFile}`
+        `[${appEditId}, versionCode=${versionCode}, packageName=${options.applicationId}]: Uploading Proguard mapping file @ ${safeBasenameForLog(mappingFile)}`
       );
       await withGoogleApiGuard(
         'deobfuscationfiles.upload.mapping',
@@ -440,24 +483,24 @@ async function uploadMappingFile(appEditId: string, versionCode: number, options
  */
 async function uploadDebugSymbolsFile(appEditId: string, versionCode: number, options: EditOptions) {
   if (options.debugSymbols != undefined && options.debugSymbols.length > 0) {
-    const fileStat = lstatSync(options.debugSymbols);
+    const debugSymbols = resolveDebugSymbolsPath(options.debugSymbols);
 
     let data: Buffer | null = null;
-    if (fileStat.isDirectory()) {
-      data = await createDebugSymbolZipFile(options.debugSymbols);
+    if (debugSymbols.kind === 'directory') {
+      data = await createDebugSymbolZipFile(debugSymbols.path);
     }
 
     if (data == null) {
-      data = readFileSync(options.debugSymbols);
+      data = readFileSync(debugSymbols.path);
     }
 
     if (data != null) {
       logger.d(
-        `[${appEditId}, versionCode=${versionCode}, packageName=${options.applicationId}]: Uploading Debug Symbols file @ ${options.debugSymbols}`
+        `[${appEditId}, versionCode=${versionCode}, packageName=${options.applicationId}]: Uploading Debug Symbols file @ ${safeBasenameForLog(debugSymbols.path)}`
       );
       await withGoogleApiGuard(
         'deobfuscationfiles.upload.debugSymbols',
-        { packageName: options.applicationId, editId: appEditId, versionCode, debugSymbols: options.debugSymbols },
+        { packageName: options.applicationId, editId: appEditId, versionCode, debugSymbols: safeBasenameForLog(debugSymbols.path) },
         () =>
           androidPublisher.edits.deobfuscationfiles.upload({
             auth: options.auth,
@@ -479,14 +522,56 @@ async function uploadDebugSymbolsFile(appEditId: string, versionCode: number, op
  * 디렉토리를 ZIP 파일에 추가
  * 디버그 심볼 디렉토리를 ZIP 파일로 압축
  */
-async function zipFileAddDirectory(root: JSZip | null, dirPath: string, rootPath: string, isRootRoot: boolean) {
+interface ZipTraversalState {
+  fileCount: number;
+  rootRealPath: string;
+  totalBytes: number;
+}
+
+async function zipFileAddDirectory(
+  root: JSZip | null,
+  dirPath: string,
+  rootPath: string,
+  isRootRoot: boolean,
+  state?: ZipTraversalState,
+  depth = 0
+) {
+  const traversal = state ?? {
+    fileCount: 0,
+    rootRealPath: fs.realpathSync(rootPath),
+    totalBytes: 0,
+  };
+
+  if (depth > MAX_DEBUG_SYMBOL_DEPTH) {
+    throw new Error(`debugSymbols directory exceeds maximum depth ${MAX_DEBUG_SYMBOL_DEPTH}`);
+  }
+
   const files = fs.readdirSync(dirPath);
   for (const file of files) {
     const filePath = path.join(dirPath, file);
-    const stat = fs.statSync(filePath);
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`debugSymbols must not contain symbolic links: ${safeBasenameForLog(filePath)}`);
+    }
+
+    const realPath = fs.realpathSync(filePath);
+    assertPathInsideRoot(realPath, traversal.rootRealPath, 'debugSymbols archive entry');
+
     if (stat.isDirectory()) {
-      await zipFileAddDirectory(root, filePath, rootPath, false);
-    } else {
+      await zipFileAddDirectory(root, filePath, rootPath, false, traversal, depth + 1);
+    } else if (stat.isFile()) {
+      const fileSize = typeof stat.size === 'number' ? stat.size : 0;
+      if (fileSize > MAX_DEBUG_SYMBOL_FILE_BYTES) {
+        throw new Error(`debugSymbols file is too large: ${safeBasenameForLog(filePath)}`);
+      }
+      traversal.fileCount += 1;
+      traversal.totalBytes += fileSize;
+      if (traversal.fileCount > MAX_DEBUG_SYMBOL_FILES) {
+        throw new Error(`debugSymbols directory contains more than ${MAX_DEBUG_SYMBOL_FILES} files`);
+      }
+      if (traversal.totalBytes > MAX_DEBUG_SYMBOL_TOTAL_BYTES) {
+        throw new Error(`debugSymbols directory exceeds ${MAX_DEBUG_SYMBOL_TOTAL_BYTES} bytes before compression`);
+      }
       const relativePath = path.relative(rootPath, filePath);
       root?.file(relativePath, fs.readFileSync(filePath));
     }
@@ -508,14 +593,14 @@ async function createDebugSymbolZipFile(debugSymbolsPath: string) {
  * APK 파일을 내부 공유용으로 업로드
  */
 async function internalSharingUploadApk(options: EditOptions, apkReleaseFile: string): Promise<InternalAppSharingArtifact> {
-  assertReadableFile(apkReleaseFile, 'internal sharing APK');
+  const releaseFile = resolveReleaseArtifactFile(apkReleaseFile, 'internal sharing APK');
   const res = await withGoogleApiGuard('internalappsharingartifacts.uploadapk', { packageName: options.applicationId, releaseFile: apkReleaseFile }, () =>
     androidPublisher.internalappsharingartifacts.uploadapk({
       auth: options.auth,
       packageName: options.applicationId,
       media: {
         mimeType: 'application/vnd.android.package-archive',
-        body: fs.createReadStream(apkReleaseFile),
+        body: fs.createReadStream(releaseFile),
       },
     })
   );
@@ -527,7 +612,7 @@ async function internalSharingUploadApk(options: EditOptions, apkReleaseFile: st
  * AAB 파일을 내부 공유용으로 업로드
  */
 async function internalSharingUploadBundle(options: EditOptions, bundleReleaseFile: string): Promise<InternalAppSharingArtifact> {
-  assertReadableFile(bundleReleaseFile, 'internal sharing bundle');
+  const releaseFile = resolveReleaseArtifactFile(bundleReleaseFile, 'internal sharing bundle');
   const res = await withGoogleApiGuard(
     'internalappsharingartifacts.uploadbundle',
     { packageName: options.applicationId, releaseFile: bundleReleaseFile },
@@ -537,7 +622,7 @@ async function internalSharingUploadBundle(options: EditOptions, bundleReleaseFi
         packageName: options.applicationId,
         media: {
           mimeType: 'application/octet-stream',
-          body: fs.createReadStream(bundleReleaseFile),
+          body: fs.createReadStream(releaseFile),
         },
       })
   );
@@ -549,7 +634,7 @@ async function internalSharingUploadBundle(options: EditOptions, bundleReleaseFi
  * APK 파일을 Google Play Console에 업로드
  */
 async function uploadApk(appEditId: string, options: EditOptions, apkReleaseFile: string): Promise<Apk> {
-  assertReadableFile(apkReleaseFile, 'APK release artifact');
+  const releaseFile = resolveReleaseArtifactFile(apkReleaseFile, 'APK release artifact');
   const res = await withGoogleApiGuard('apks.upload', { packageName: options.applicationId, editId: appEditId, releaseFile: apkReleaseFile }, () =>
     androidPublisher.edits.apks.upload({
       auth: options.auth,
@@ -557,7 +642,7 @@ async function uploadApk(appEditId: string, options: EditOptions, apkReleaseFile
       editId: appEditId,
       media: {
         mimeType: 'application/vnd.android.package-archive',
-        body: fs.createReadStream(apkReleaseFile),
+        body: fs.createReadStream(releaseFile),
       },
     })
   );
@@ -569,7 +654,7 @@ async function uploadApk(appEditId: string, options: EditOptions, apkReleaseFile
  * AAB 파일을 Google Play Console에 업로드
  */
 async function uploadBundle(appEditId: string, options: EditOptions, bundleReleaseFile: string): Promise<Bundle> {
-  assertReadableFile(bundleReleaseFile, 'AAB release artifact');
+  const releaseFile = resolveReleaseArtifactFile(bundleReleaseFile, 'AAB release artifact');
   const res = await withGoogleApiGuard('bundles.upload', { packageName: options.applicationId, editId: appEditId, releaseFile: bundleReleaseFile }, () =>
     androidPublisher.edits.bundles.upload({
       auth: options.auth,
@@ -577,7 +662,7 @@ async function uploadBundle(appEditId: string, options: EditOptions, bundleRelea
       editId: appEditId,
       media: {
         mimeType: 'application/octet-stream',
-        body: fs.createReadStream(bundleReleaseFile),
+        body: fs.createReadStream(releaseFile),
       },
     })
   );

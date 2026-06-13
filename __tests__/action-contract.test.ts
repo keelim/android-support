@@ -23,7 +23,7 @@ describe('action runtime contract', () => {
   });
 
   test('action defaults match runtime fallback-sensitive inputs', () => {
-    expect(actionInputBlock('track')).toContain("default: 'production'");
+    expect(actionInputBlock('track')).not.toContain('default:');
     expect(actionInputBlock('status')).toContain("default: 'completed'");
     expect(actionInputBlock('inAppUpdatePriority')).toContain("default: '0'");
   });

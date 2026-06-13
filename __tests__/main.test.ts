@@ -7,7 +7,13 @@ jest.mock('@actions/core', () => ({
 
 jest.mock('fs', () => ({
   __esModule: true,
+  accessSync: jest.fn(),
+  constants: { R_OK: 4 },
   existsSync: jest.fn(),
+  lstatSync: jest.fn(),
+  mkdtempSync: jest.fn(),
+  realpathSync: jest.fn(),
+  rmSync: jest.fn(),
   writeFileSync: jest.fn(),
   promises: {
     readFile: jest.fn(),
@@ -73,20 +79,46 @@ import { readLocalizedReleaseNotes } from '../src/whatsnew';
 import { __testables, run, uploadRun } from '../src/main';
 
 type InputMap = Record<string, string | undefined>;
+const VALID_SERVICE_ACCOUNT_JSON = JSON.stringify({
+  type: 'service_account',
+  project_id: 'project-id',
+  client_email: 'bot@example.com',
+  private_key: 'private-key',
+});
+const TEMP_SERVICE_ACCOUNT_FILE = '/tmp/android-support-service-account-test/serviceAccountJson.json';
+const TEMP_SIGNING_KEY_FILE = '/tmp/android-support-signing-test/signingKey.jks';
+
+function fileStat(overrides: Partial<{ isDirectory: () => boolean; isFile: () => boolean; isSymbolicLink: () => boolean; size: number }> = {}) {
+  return {
+    isDirectory: () => false,
+    isFile: () => true,
+    isSymbolicLink: () => false,
+    size: 1024,
+    ...overrides,
+  };
+}
 
 function setInputs(inputs: InputMap) {
   (core.getInput as jest.Mock).mockImplementation((name: string) => inputs[name] ?? '');
 }
 
 describe('main module', () => {
+  const originalRunnerTemp = process.env.RUNNER_TEMP;
+
   beforeEach(() => {
     jest.clearAllMocks();
     delete process.env.DEBUG_ACTION;
+    process.env.RUNNER_TEMP = '/tmp';
     setInputs({});
     (fs.existsSync as jest.Mock).mockReturnValue(true);
+    (fs.accessSync as jest.Mock).mockReturnValue(undefined);
+    (fs.lstatSync as jest.Mock).mockReturnValue(fileStat());
+    (fs.mkdtempSync as jest.Mock).mockImplementation((prefix: string) => `${prefix}test`);
+    (fs.realpathSync as unknown as jest.Mock).mockImplementation((filePath: string) => filePath);
+    (fs.rmSync as jest.Mock).mockReturnValue(undefined);
     (writeFile as jest.Mock).mockResolvedValue(undefined);
     (unlink as jest.Mock).mockResolvedValue(undefined);
-    (fs.promises.readFile as unknown as jest.Mock).mockResolvedValue('notes-from-file');
+    (fs.promises.readFile as unknown as jest.Mock).mockResolvedValue(VALID_SERVICE_ACCOUNT_JSON);
     (pTimeout as jest.Mock).mockImplementation(async (promise: Promise<unknown>) => promise);
     (runUploadEdit as jest.Mock).mockResolvedValue(undefined);
     (validateInAppUpdatePriority as jest.Mock).mockResolvedValue(undefined);
@@ -100,11 +132,19 @@ describe('main module', () => {
     (readLocalizedReleaseNotes as jest.Mock).mockResolvedValue([{ language: 'en-US', text: 'localized' }]);
   });
 
+  afterAll(() => {
+    if (originalRunnerTemp === undefined) {
+      delete process.env.RUNNER_TEMP;
+    } else {
+      process.env.RUNNER_TEMP = originalRunnerTemp;
+    }
+  });
+
   describe('run', () => {
     test('routes to upload flow', async () => {
       setInputs({
         type: 'upload',
-        serviceAccountJsonPlainText: '{}',
+        serviceAccountJsonPlainText: VALID_SERVICE_ACCOUNT_JSON,
         packageName: 'com.app',
         releaseFiles: './__tests__/releasefiles/release.aab',
         track: 'production',
@@ -163,7 +203,7 @@ describe('main module', () => {
     });
 
     test('does not own service account cleanup at the router level', async () => {
-      setInputs({ type: 'unknown', serviceAccountJsonPlainText: '{}' });
+      setInputs({ type: 'unknown', serviceAccountJsonPlainText: VALID_SERVICE_ACCOUNT_JSON });
 
       await run();
 
@@ -174,7 +214,7 @@ describe('main module', () => {
   describe('uploadRun', () => {
     test('runs upload flow with parsed options and direct release notes', async () => {
       setInputs({
-        serviceAccountJsonPlainText: '{}',
+        serviceAccountJsonPlainText: VALID_SERVICE_ACCOUNT_JSON,
         packageName: 'com.app',
         releaseFile: './__tests__/releasefiles/release.aab',
         track: 'production',
@@ -216,7 +256,7 @@ describe('main module', () => {
         "WARNING!! 'releaseFile' is deprecated and will be removed in a future release. Please migrate to 'releaseFiles'"
       );
       expect(pTimeout).toHaveBeenCalledTimes(1);
-      expect(unlink).toHaveBeenCalledWith('./serviceAccountJson.json');
+      expect(unlink).toHaveBeenCalledWith(TEMP_SERVICE_ACCOUNT_FILE);
     });
 
     test('fails before upload when provided optional files are missing', async () => {
@@ -340,7 +380,7 @@ describe('main module', () => {
 
     test('dry-run validates inputs but skips the Play API upload', async () => {
       setInputs({
-        serviceAccountJsonPlainText: '{}',
+        serviceAccountJsonPlainText: VALID_SERVICE_ACCOUNT_JSON,
         packageName: 'com.app',
         releaseFiles: './__tests__/releasefiles/release.aab',
         track: 'production',
@@ -358,7 +398,7 @@ describe('main module', () => {
 
     test('handles Error in upload flow', async () => {
       setInputs({
-        serviceAccountJsonPlainText: '{}',
+        serviceAccountJsonPlainText: VALID_SERVICE_ACCOUNT_JSON,
         packageName: 'com.app',
         releaseFiles: './__tests__/releasefiles/release.aab',
         track: 'production',
@@ -369,12 +409,12 @@ describe('main module', () => {
       await uploadRun();
 
       expect(core.setFailed).toHaveBeenCalledWith('status invalid');
-      expect(unlink).toHaveBeenCalledWith('./serviceAccountJson.json');
+      expect(unlink).toHaveBeenCalledWith(TEMP_SERVICE_ACCOUNT_FILE);
     });
 
     test('handles non-Error in upload flow', async () => {
       setInputs({
-        serviceAccountJsonPlainText: '{}',
+        serviceAccountJsonPlainText: VALID_SERVICE_ACCOUNT_JSON,
         packageName: 'com.app',
         releaseFiles: './__tests__/releasefiles/release.aab',
         track: 'production',
@@ -389,7 +429,7 @@ describe('main module', () => {
 
     test('rejects malformed numeric input strings before upload', async () => {
       setInputs({
-        serviceAccountJsonPlainText: '{}',
+        serviceAccountJsonPlainText: VALID_SERVICE_ACCOUNT_JSON,
         packageName: 'com.app',
         releaseFiles: './__tests__/releasefiles/release.aab',
         track: 'production',
@@ -406,7 +446,7 @@ describe('main module', () => {
 
     test('rejects malformed in-app update priority strings before upload', async () => {
       setInputs({
-        serviceAccountJsonPlainText: '{}',
+        serviceAccountJsonPlainText: VALID_SERVICE_ACCOUNT_JSON,
         packageName: 'com.app',
         releaseFiles: './__tests__/releasefiles/release.aab',
         track: 'production',
@@ -422,7 +462,7 @@ describe('main module', () => {
 
     test('propagates pTimeout failures and still cleans up credentials', async () => {
       setInputs({
-        serviceAccountJsonPlainText: '{}',
+        serviceAccountJsonPlainText: VALID_SERVICE_ACCOUNT_JSON,
         packageName: 'com.app',
         releaseFiles: './__tests__/releasefiles/release.aab',
         track: 'production',
@@ -434,24 +474,40 @@ describe('main module', () => {
 
       expect(runUploadEdit).toHaveBeenCalled();
       expect(core.setFailed).toHaveBeenCalledWith('upload timed out');
-      expect(unlink).toHaveBeenCalledWith('./serviceAccountJson.json');
+      expect(unlink).toHaveBeenCalledWith(TEMP_SERVICE_ACCOUNT_FILE);
     });
   });
 
   describe('__testables.validateServiceAccountJson', () => {
-    test('prefers plain text credentials when both credential options are present', async () => {
-      await __testables.validateServiceAccountJson('{"client_email":"a"}', '/tmp/service.json');
-
-      expect(logger.w).toHaveBeenCalledWith(
-        "Both 'serviceAccountJsonPlainText' and 'serviceAccountJson' were provided! 'serviceAccountJson' will be ignored."
+    test('rejects when both credential options are present', async () => {
+      await expect(__testables.validateServiceAccountJson(VALID_SERVICE_ACCOUNT_JSON, '/tmp/service.json')).rejects.toThrow(
+        "Provide only one of 'serviceAccountJsonPlainText' or 'serviceAccountJson'"
       );
-      expect(writeFile).toHaveBeenCalledWith('./serviceAccountJson.json', '{"client_email":"a"}', { encoding: 'utf8' });
-      expect(core.exportVariable).toHaveBeenCalledWith('GOOGLE_APPLICATION_CREDENTIALS', './serviceAccountJson.json');
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(core.exportVariable).not.toHaveBeenCalled();
+    });
+
+    test('writes plain text credentials to a generated temp file', async () => {
+      await __testables.validateServiceAccountJson(VALID_SERVICE_ACCOUNT_JSON, undefined);
+
+      expect(writeFile).toHaveBeenCalledWith(
+        TEMP_SERVICE_ACCOUNT_FILE,
+        VALID_SERVICE_ACCOUNT_JSON,
+        expect.objectContaining({ encoding: 'utf8', mode: 0o600 })
+      );
+      expect(core.exportVariable).toHaveBeenCalledWith('GOOGLE_APPLICATION_CREDENTIALS', TEMP_SERVICE_ACCOUNT_FILE);
     });
 
     test('exports file credentials when plain text credentials are not provided', async () => {
       await __testables.validateServiceAccountJson(undefined, '/tmp/service.json');
       expect(core.exportVariable).toHaveBeenCalledWith('GOOGLE_APPLICATION_CREDENTIALS', '/tmp/service.json');
+    });
+
+    test('rejects malformed service account JSON before exporting credentials', async () => {
+      await expect(__testables.validateServiceAccountJson('{"type":"service_account"}', undefined)).rejects.toThrow(
+        'serviceAccountJsonPlainText is missing required field "project_id"'
+      );
+      expect(core.exportVariable).not.toHaveBeenCalled();
     });
 
     test('rejects when neither credential source is provided', async () => {
@@ -462,20 +518,29 @@ describe('main module', () => {
   });
 
   describe('__testables.cleanupServiceAccountJsonFile', () => {
+    test('does nothing when no generated credential file exists', async () => {
+      await __testables.cleanupServiceAccountJsonFile('');
+
+      expect(logger.d).toHaveBeenCalledWith('No generated service account json file to clean up');
+      expect(unlink).not.toHaveBeenCalled();
+    });
+
     test('ignores already removed temp credential file', async () => {
+      await __testables.validateServiceAccountJson(VALID_SERVICE_ACCOUNT_JSON, undefined);
+      jest.clearAllMocks();
       (unlink as jest.Mock).mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
 
       await __testables.cleanupServiceAccountJsonFile();
 
-      expect(logger.d).toHaveBeenCalledWith('Service account json file already removed: ./serviceAccountJson.json');
+      expect(logger.d).toHaveBeenCalledWith('Service account json file already removed: serviceAccountJson.json');
     });
 
     test('logs cleanup failures without throwing', async () => {
       (unlink as jest.Mock).mockRejectedValueOnce(new Error('locked'));
 
-      await __testables.cleanupServiceAccountJsonFile();
+      await __testables.cleanupServiceAccountJsonFile(TEMP_SERVICE_ACCOUNT_FILE);
 
-      expect(logger.w).toHaveBeenCalledWith('Failed to clean up service account json file ./serviceAccountJson.json: locked');
+      expect(logger.w).toHaveBeenCalledWith('Failed to clean up service account json file serviceAccountJson.json: locked');
     });
   });
 
@@ -512,8 +577,9 @@ describe('main module', () => {
 
       await __testables.signRun();
 
-      expect(fs.writeFileSync).toHaveBeenCalledWith('/releases/signingKey.jks', 'a2V5', 'base64');
-      expect(signApkFile).toHaveBeenCalledWith('/releases/app.apk', '/releases/signingKey.jks', 'alias', 'store-pass', 'key-pass');
+      expect(fs.writeFileSync).toHaveBeenCalledWith(TEMP_SIGNING_KEY_FILE, 'a2V5', { encoding: 'base64', mode: 0o600 });
+      expect(signApkFile).toHaveBeenCalledWith('/releases/app.apk', TEMP_SIGNING_KEY_FILE, 'alias', 'store-pass', 'key-pass');
+      expect(fs.rmSync).toHaveBeenCalledWith('/tmp/android-support-signing-test', { recursive: true, force: true });
       expect(core.exportVariable).toHaveBeenCalledWith('SIGNED_RELEASE_FILE_0', '/releases/app-signed.apk');
       expect(core.setOutput).toHaveBeenCalledWith('signedReleaseFile0', '/releases/app-signed.apk');
       expect(core.exportVariable).toHaveBeenCalledWith('SIGNED_RELEASE_FILE', '/releases/app-signed.apk');
@@ -571,6 +637,23 @@ describe('main module', () => {
 
       expect(core.setFailed).toHaveBeenCalledWith('zipalign failed');
       expect(core.setOutput).not.toHaveBeenCalledWith('signedReleaseFiles', expect.any(String));
+    });
+
+    test('logs temporary signing key cleanup failures', async () => {
+      setInputs({
+        releaseDirectory: '/releases',
+        signingKeyBase64: 'a2V5',
+        alias: 'alias',
+        keyStorePassword: 'store-pass',
+      });
+      (ioUtils.findReleaseFiles as jest.Mock).mockReturnValue([{ name: 'app.apk' }]);
+      (fs.rmSync as jest.Mock).mockImplementationOnce(() => {
+        throw new Error('cleanup denied');
+      });
+
+      await __testables.signRun();
+
+      expect(logger.w).toHaveBeenCalledWith('Failed to clean up temporary signing key directory: cleanup denied');
     });
 
     test('reports aab signer promise rejection without exporting outputs', async () => {
@@ -650,16 +733,16 @@ describe('main module', () => {
     test('handles file read failure', async () => {
       (fs.promises.readFile as unknown as jest.Mock).mockRejectedValue(new Error('no file'));
       await expect(__testables.getReleaseNotes('file', './missing.md', undefined)).rejects.toThrow(
-        'Failed to read release notes file: ./missing.md: no file'
+        'Failed to read release notes file missing.md: no file'
       );
     });
 
     test('handles file read failure with non-Error value', async () => {
       (fs.promises.readFile as unknown as jest.Mock).mockRejectedValue('missing');
       await expect(__testables.getReleaseNotes('file', './missing.md', undefined)).rejects.toThrow(
-        'Failed to read release notes file: ./missing.md: missing'
+        'Failed to read release notes file missing.md: missing'
       );
-      expect(logger.e).toHaveBeenCalledWith('Failed to read release notes file: ./missing.md. Error: missing');
+      expect(logger.e).toHaveBeenCalledWith('Failed to read release notes file: missing.md. Error: missing');
     });
 
     test('fails when file release notes source has no path', async () => {

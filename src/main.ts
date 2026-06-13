@@ -21,14 +21,24 @@ import { androidpublisher_v3 } from '@googleapis/androidpublisher';
 import { compact } from 'es-toolkit/array';
 import { isNotNil } from 'es-toolkit/predicate';
 import { readLocalizedReleaseNotes } from './whatsnew';
+import {
+  createSecureTempDir,
+  normalizeUnknownError,
+  resolveSecureFile,
+  safeBasenameForLog,
+  validateServiceAccountJsonPayload,
+} from './utils/security-utils';
 import LocalizedText = androidpublisher_v3.Schema$LocalizedText;
 
-const SERVICE_ACCOUNT_FILE = './serviceAccountJson.json';
+const SERVICE_ACCOUNT_FILE_NAME = 'serviceAccountJson.json';
+const SIGNING_KEY_FILE_NAME = 'signingKey.jks';
+const SERVICE_ACCOUNT_JSON_MAX_BYTES = 64 * 1024;
+const RELEASE_NOTES_MAX_BYTES = 128 * 1024;
 const STRICT_NUMBER_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+let generatedServiceAccountFile: string | undefined;
 
 function normalizeError(error: unknown): Error {
-  if (error instanceof Error) return error;
-  return new Error(String(error));
+  return normalizeUnknownError(error);
 }
 
 function parseStrictNumberInput(value: string, inputName: string): number {
@@ -56,17 +66,28 @@ function optionalInputValue(value: string): string | undefined {
   return value.length > 0 ? value : undefined;
 }
 
-async function cleanupServiceAccountJsonFile(): Promise<void> {
+async function cleanupServiceAccountJsonFile(filePath = generatedServiceAccountFile): Promise<void> {
+  if (!filePath) {
+    logger.d('No generated service account json file to clean up');
+    return;
+  }
+
   logger.d('Cleaning up service account json file');
   try {
-    await unlink(SERVICE_ACCOUNT_FILE);
+    await unlink(filePath);
+    if (filePath === generatedServiceAccountFile) {
+      generatedServiceAccountFile = undefined;
+    }
   } catch (error: unknown) {
     const normalized = normalizeError(error);
     if ((normalized as NodeJS.ErrnoException).code === 'ENOENT') {
-      logger.d(`Service account json file already removed: ${SERVICE_ACCOUNT_FILE}`);
+      logger.d(`Service account json file already removed: ${safeBasenameForLog(filePath)}`);
+      if (filePath === generatedServiceAccountFile) {
+        generatedServiceAccountFile = undefined;
+      }
       return;
     }
-    logger.w(`Failed to clean up service account json file ${SERVICE_ACCOUNT_FILE}: ${normalized.message}`);
+    logger.w(`Failed to clean up service account json file ${safeBasenameForLog(filePath)}: ${normalized.message}`);
   }
 }
 
@@ -120,19 +141,19 @@ export async function uploadRun() {
     logger.d('Starting app upload process with the following inputs:');
     logger.d(`  packageName: ${packageName}`);
     logger.d(`  track: ${track}`);
-    logger.d(`  releaseFile: ${releaseFile}`);
-    logger.d(`  releaseFiles: ${releaseFiles?.join(', ')}`);
+    logger.d(`  releaseFile: ${safeBasenameForLog(releaseFile)}`);
+    logger.d(`  releaseFiles: ${releaseFiles?.map(safeBasenameForLog).join(', ')}`);
     logger.d(`  releaseName: ${releaseName}`);
     logger.d(`  inAppUpdatePriority: ${inAppUpdatePriority}`);
     logger.d(`  userFraction: ${userFraction}`);
     logger.d(`  status: ${status}`);
-    logger.d(`  whatsNewDirectory: ${whatsNewDir}`);
-    logger.d(`  mappingFile: ${mappingFile}`);
-    logger.d(`  debugSymbols: ${debugSymbols}`);
+    logger.d(`  whatsNewDirectory: ${safeBasenameForLog(whatsNewDir)}`);
+    logger.d(`  mappingFile: ${safeBasenameForLog(mappingFile)}`);
+    logger.d(`  debugSymbols: ${safeBasenameForLog(debugSymbols)}`);
     logger.d(`  changesNotSentForReview: ${changesNotSentForReview}`);
-    logger.d(`  existingEditId: ${existingEditId}`);
+    logger.d(`  existingEditId: ${existingEditId ? `${existingEditId.slice(0, 4)}...` : undefined}`);
     logger.d(`  releaseNotesSource: ${releaseNotesSource}`);
-    logger.d(`  releaseNotesPath: ${releaseNotesPath}`);
+    logger.d(`  releaseNotesPath: ${safeBasenameForLog(releaseNotesPath)}`);
     logger.d(`  releaseNotesContent (present): ${!!releaseNotesContent}`);
 
     // 릴리스 노트 가져오기
@@ -260,20 +281,27 @@ async function validateServiceAccountJson(
   serviceAccountJson: string | undefined
 ): Promise<void> {
   if (serviceAccountJson && serviceAccountJsonRaw) {
-    // 두 가지 방식이 모두 제공된 경우 경고
-    logger.w("Both 'serviceAccountJsonPlainText' and 'serviceAccountJson' were provided! 'serviceAccountJson' will be ignored.");
+    throw new Error("Provide only one of 'serviceAccountJsonPlainText' or 'serviceAccountJson'");
   }
 
   if (serviceAccountJsonRaw) {
-    // 원본 텍스트가 제공된 경우 파일로 저장
-    const serviceAccountFile = SERVICE_ACCOUNT_FILE;
+    validateServiceAccountJsonPayload(serviceAccountJsonRaw, 'serviceAccountJsonPlainText');
+    const tempDir = createSecureTempDir('android-support-service-account-');
+    const serviceAccountFile = path.join(tempDir, SERVICE_ACCOUNT_FILE_NAME);
     await writeFile(serviceAccountFile, serviceAccountJsonRaw, {
       encoding: 'utf8',
+      mode: 0o600,
     });
+    generatedServiceAccountFile = serviceAccountFile;
     core.exportVariable('GOOGLE_APPLICATION_CREDENTIALS', serviceAccountFile);
   } else if (serviceAccountJson) {
-    // JSON 파일 경로가 제공된 경우 환경 변수 설정
-    core.exportVariable('GOOGLE_APPLICATION_CREDENTIALS', serviceAccountJson);
+    const serviceAccountFile = resolveSecureFile(serviceAccountJson, 'serviceAccountJson', {
+      extensions: ['.json'],
+      maxBytes: SERVICE_ACCOUNT_JSON_MAX_BYTES,
+    });
+    const serviceAccountJsonText = await fs.promises.readFile(serviceAccountFile, 'utf8');
+    validateServiceAccountJsonPayload(String(serviceAccountJsonText), 'serviceAccountJson');
+    core.exportVariable('GOOGLE_APPLICATION_CREDENTIALS', serviceAccountFile);
   } else {
     // 둘 다 제공되지 않은 경우 오류
     throw new Error("You must provide one of 'serviceAccountJsonPlainText' or 'serviceAccountJson' to use this action");
@@ -285,6 +313,7 @@ async function validateServiceAccountJson(
  * APK/AAB 파일에 서명을 추가
  */
 async function signRun() {
+  let signingKeyTempDir: string | undefined;
   try {
     if (process.env.DEBUG_ACTION === 'true') {
       logger.d('DEBUG FLAG DETECTED, SHORTCUTTING ACTION.');
@@ -298,14 +327,15 @@ async function signRun() {
     const keyStorePassword = requireInputValue(core.getInput('keyStorePassword'), 'keyStorePassword');
     const keyPassword = core.getInput('keyPassword');
 
-    console.log(`Preparing to sign key @ ${releaseDir} with signing key`);
+    console.log(`Preparing to sign key @ ${safeBasenameForLog(releaseDir)} with signing key`);
 
     // 1. 릴리스 파일 찾기
     const releaseFiles = io.findReleaseFiles(releaseDir);
     if (releaseFiles !== undefined && releaseFiles.length !== 0) {
       // 2. 서명 키 디코딩 및 저장
-      const signingKey = path.join(releaseDir, 'signingKey.jks');
-      fs.writeFileSync(signingKey, signingKeyBase64, 'base64');
+      signingKeyTempDir = createSecureTempDir('android-support-signing-');
+      const signingKey = path.join(signingKeyTempDir, SIGNING_KEY_FILE_NAME);
+      fs.writeFileSync(signingKey, signingKeyBase64, { encoding: 'base64', mode: 0o600 });
 
       // 3. 각 릴리스 파일에 대해 zipalign 및 서명 수행
       const signedReleaseFiles: string[] = [];
@@ -347,6 +377,15 @@ async function signRun() {
     }
   } catch (error) {
     core.setFailed(normalizeError(error).message);
+  } finally {
+    if (signingKeyTempDir) {
+      try {
+        fs.rmSync(signingKeyTempDir, { recursive: true, force: true });
+        logger.d(`Cleaned up temporary signing key directory ${safeBasenameForLog(signingKeyTempDir)}`);
+      } catch (cleanupError: unknown) {
+        logger.w(`Failed to clean up temporary signing key directory: ${normalizeError(cleanupError).message}`);
+      }
+    }
   }
 }
 
@@ -355,12 +394,15 @@ async function getReleaseNotes(source: string, path: string | undefined, content
     logger.d('Using release notes provided directly.');
     return content;
   } else if (source === 'file' && path) {
-    logger.d(`Reading release notes from file: ${path}`);
+    logger.d(`Reading release notes from file: ${safeBasenameForLog(path)}`);
     try {
-      return await fs.promises.readFile(path, 'utf8');
+      const releaseNotesPath = resolveSecureFile(path, 'releaseNotesPath', {
+        maxBytes: RELEASE_NOTES_MAX_BYTES,
+      });
+      return await fs.promises.readFile(releaseNotesPath, 'utf8');
     } catch (error) {
-      logger.e(`Failed to read release notes file: ${path}. Error: ${normalizeError(error).message}`);
-      throw new Error(`Failed to read release notes file: ${path}: ${normalizeError(error).message}`);
+      logger.e(`Failed to read release notes file: ${safeBasenameForLog(path)}. Error: ${normalizeError(error).message}`);
+      throw new Error(`Failed to read release notes file ${safeBasenameForLog(path)}: ${normalizeError(error).message}`);
     }
   } else if (source === 'file') {
     throw new Error("releaseNotesSource is 'file' but releaseNotesPath was not provided.");

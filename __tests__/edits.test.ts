@@ -55,6 +55,7 @@ jest.mock('fs', () => ({
   accessSync: jest.fn(),
   constants: { R_OK: 4 },
   createReadStream: jest.fn(() => 'stream'),
+  realpathSync: jest.fn(),
   readdirSync: jest.fn(),
   statSync: jest.fn(),
   readFileSync: jest.fn(),
@@ -123,10 +124,17 @@ describe('edits module', () => {
     mockAndroidPublisher.edits.delete.mockResolvedValue({});
     mockAndroidPublisher.edits.deobfuscationfiles.upload.mockResolvedValue({});
     (readLocalizedReleaseNotes as jest.Mock).mockResolvedValue([{ language: 'en-US', text: 'notes' }]);
+    (fs.accessSync as jest.Mock).mockReturnValue(undefined);
     (fs.readFileSync as jest.Mock).mockReturnValue(Buffer.from('file'));
+    (fs.realpathSync as unknown as jest.Mock).mockImplementation((filePath: string) => filePath);
     (fs.readdirSync as jest.Mock).mockReturnValue([]);
     (fs.statSync as jest.Mock).mockReturnValue({ isDirectory: () => false });
-    (fs.lstatSync as jest.Mock).mockReturnValue({ isDirectory: () => false });
+    (fs.lstatSync as jest.Mock).mockReturnValue({
+      isDirectory: () => false,
+      isFile: () => true,
+      isSymbolicLink: () => false,
+      size: 1024,
+    });
   });
 
   afterAll(() => {
@@ -435,18 +443,19 @@ describe('edits module', () => {
     });
 
     test('uploads zipped directory symbols', async () => {
-      (fs.lstatSync as jest.Mock).mockReturnValueOnce({ isDirectory: () => true });
+      (fs.lstatSync as jest.Mock).mockImplementation((filePath: string) => ({
+        isDirectory: () => filePath === '/tmp/symbols',
+        isFile: () => filePath !== '/tmp/symbols',
+        isSymbolicLink: () => false,
+        size: 6,
+      }));
       (fs.readdirSync as jest.Mock).mockImplementation((dir: string) => {
-        if (dir === '/symbols') return ['a.so'];
+        if (dir === '/tmp/symbols') return ['a.so'];
         return [];
       });
-      (fs.statSync as jest.Mock).mockImplementation((file: string) => ({
-        isDirectory: () => false,
-        file,
-      }));
       (fs.readFileSync as jest.Mock).mockReturnValue(Buffer.from('binary'));
 
-      await __testables.uploadDebugSymbolsFile('edit-1', 101, options({ debugSymbols: '/symbols' }));
+      await __testables.uploadDebugSymbolsFile('edit-1', 101, options({ debugSymbols: '/tmp/symbols' }));
 
       expect(mockAndroidPublisher.edits.deobfuscationfiles.upload).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -457,10 +466,15 @@ describe('edits module', () => {
     });
 
     test('uploads file symbols directly', async () => {
-      (fs.lstatSync as jest.Mock).mockReturnValueOnce({ isDirectory: () => false });
+      (fs.lstatSync as jest.Mock).mockReturnValue({
+        isDirectory: () => false,
+        isFile: () => true,
+        isSymbolicLink: () => false,
+        size: 1024,
+      });
       (fs.readFileSync as jest.Mock).mockReturnValueOnce(Buffer.from('sym'));
 
-      await __testables.uploadDebugSymbolsFile('edit-1', 102, options({ debugSymbols: '/symbols.zip' }));
+      await __testables.uploadDebugSymbolsFile('edit-1', 102, options({ debugSymbols: '/tmp/symbols.zip' }));
 
       expect(mockAndroidPublisher.edits.deobfuscationfiles.upload).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -475,16 +489,49 @@ describe('edits module', () => {
         throw new Error('lstat failed');
       });
 
-      await expect(__testables.uploadDebugSymbolsFile('edit-1', 102, options({ debugSymbols: '/symbols.zip' }))).rejects.toThrow('lstat failed');
+      await expect(__testables.uploadDebugSymbolsFile('edit-1', 102, options({ debugSymbols: '/tmp/symbols.zip' }))).rejects.toThrow(
+        'lstat failed'
+      );
       expect(mockAndroidPublisher.edits.deobfuscationfiles.upload).not.toHaveBeenCalled();
     });
 
+    test('rejects symlink debug symbols input', async () => {
+      (fs.lstatSync as jest.Mock).mockReturnValue({
+        isDirectory: () => false,
+        isFile: () => false,
+        isSymbolicLink: () => true,
+        size: 0,
+      });
+
+      await expect(__testables.uploadDebugSymbolsFile('edit-1', 102, options({ debugSymbols: '/tmp/symbols.zip' }))).rejects.toThrow(
+        'debugSymbols must not be a symbolic link: symbols.zip'
+      );
+    });
+
+    test('rejects debug symbols paths that are neither file nor directory', async () => {
+      (fs.lstatSync as jest.Mock).mockReturnValue({
+        isDirectory: () => false,
+        isFile: () => false,
+        isSymbolicLink: () => false,
+        size: 0,
+      });
+
+      await expect(__testables.uploadDebugSymbolsFile('edit-1', 102, options({ debugSymbols: '/tmp/device' }))).rejects.toThrow(
+        'debugSymbols must be a regular .zip file or directory: device'
+      );
+    });
+
     test('propagates debug symbols upload failures', async () => {
-      (fs.lstatSync as jest.Mock).mockReturnValueOnce({ isDirectory: () => false });
+      (fs.lstatSync as jest.Mock).mockReturnValue({
+        isDirectory: () => false,
+        isFile: () => true,
+        isSymbolicLink: () => false,
+        size: 1024,
+      });
       (fs.readFileSync as jest.Mock).mockReturnValueOnce(Buffer.from('sym'));
       mockAndroidPublisher.edits.deobfuscationfiles.upload.mockRejectedValue(new Error('symbols upload failed'));
 
-      await expect(__testables.uploadDebugSymbolsFile('edit-1', 102, options({ debugSymbols: '/symbols.zip' }))).rejects.toThrow(
+      await expect(__testables.uploadDebugSymbolsFile('edit-1', 102, options({ debugSymbols: '/tmp/symbols.zip' }))).rejects.toThrow(
         'deobfuscationfiles.upload.debugSymbols failed'
       );
     });
@@ -497,8 +544,11 @@ describe('edits module', () => {
         if (dir === '/root/dir') return ['file2.txt'];
         return [];
       });
-      (fs.statSync as jest.Mock).mockImplementation((filePath: string) => ({
+      (fs.lstatSync as jest.Mock).mockImplementation((filePath: string) => ({
         isDirectory: () => filePath.endsWith('/dir'),
+        isFile: () => !filePath.endsWith('/dir'),
+        isSymbolicLink: () => false,
+        size: 8,
       }));
       (fs.readFileSync as jest.Mock).mockImplementation((filePath: string) => Buffer.from(`data:${filePath}`));
 
@@ -509,9 +559,99 @@ describe('edits module', () => {
       expect(root.file).toHaveBeenCalledWith('file1.txt', expect.any(Buffer));
     });
 
+    test('rejects symlinks while creating debug symbol zips', async () => {
+      (fs.readdirSync as jest.Mock).mockReturnValue(['linked.so']);
+      (fs.lstatSync as jest.Mock).mockReturnValue({
+        isDirectory: () => false,
+        isFile: () => false,
+        isSymbolicLink: () => true,
+        size: 0,
+      });
+
+      await expect(__testables.zipFileAddDirectory({ file: jest.fn() } as never, '/root', '/root', true)).rejects.toThrow(
+        'debugSymbols must not contain symbolic links: linked.so'
+      );
+    });
+
+    test('rejects debug symbol directory trees that are too deep', async () => {
+      await expect(
+        __testables.zipFileAddDirectory({ file: jest.fn() } as never, '/root', '/root', true, undefined, 17)
+      ).rejects.toThrow('debugSymbols directory exceeds maximum depth 16');
+    });
+
+    test('rejects individual debug symbol files that are too large', async () => {
+      (fs.readdirSync as jest.Mock).mockReturnValue(['huge.so']);
+      (fs.lstatSync as jest.Mock).mockReturnValue({
+        isDirectory: () => false,
+        isFile: () => true,
+        isSymbolicLink: () => false,
+        size: 512 * 1024 * 1024 + 1,
+      });
+
+      await expect(__testables.zipFileAddDirectory({ file: jest.fn() } as never, '/root', '/root', true)).rejects.toThrow(
+        'debugSymbols file is too large: huge.so'
+      );
+    });
+
+    test('treats missing debug symbol file size as zero', async () => {
+      (fs.readdirSync as jest.Mock).mockReturnValue(['unknown-size.so']);
+      (fs.lstatSync as jest.Mock).mockReturnValue({
+        isDirectory: () => false,
+        isFile: () => true,
+        isSymbolicLink: () => false,
+      });
+      (fs.readFileSync as jest.Mock).mockReturnValue(Buffer.from('binary'));
+
+      const root = { file: jest.fn() };
+      await __testables.zipFileAddDirectory(root as never, '/root', '/root', true);
+
+      expect(root.file).toHaveBeenCalledWith('unknown-size.so', expect.any(Buffer));
+    });
+
+    test('rejects debug symbol directories with too many files', async () => {
+      (fs.readdirSync as jest.Mock).mockReturnValue(['extra.so']);
+      (fs.lstatSync as jest.Mock).mockReturnValue({
+        isDirectory: () => false,
+        isFile: () => true,
+        isSymbolicLink: () => false,
+        size: 1,
+      });
+
+      await expect(
+        __testables.zipFileAddDirectory({ file: jest.fn() } as never, '/root', '/root', true, {
+          fileCount: 10000,
+          rootRealPath: '/root',
+          totalBytes: 0,
+        })
+      ).rejects.toThrow('debugSymbols directory contains more than 10000 files');
+    });
+
+    test('rejects debug symbol directories that exceed total size limits', async () => {
+      (fs.readdirSync as jest.Mock).mockReturnValue(['extra.so']);
+      (fs.lstatSync as jest.Mock).mockReturnValue({
+        isDirectory: () => false,
+        isFile: () => true,
+        isSymbolicLink: () => false,
+        size: 2,
+      });
+
+      await expect(
+        __testables.zipFileAddDirectory({ file: jest.fn() } as never, '/root', '/root', true, {
+          fileCount: 0,
+          rootRealPath: '/root',
+          totalBytes: 1024 * 1024 * 1024 - 1,
+        })
+      ).rejects.toThrow('debugSymbols directory exceeds 1073741824 bytes before compression');
+    });
+
     test('supports null root without throwing', async () => {
       (fs.readdirSync as jest.Mock).mockReturnValue(['file1.txt']);
-      (fs.statSync as jest.Mock).mockReturnValue({ isDirectory: () => false });
+      (fs.lstatSync as jest.Mock).mockReturnValue({
+        isDirectory: () => false,
+        isFile: () => true,
+        isSymbolicLink: () => false,
+        size: 9,
+      });
       (fs.readFileSync as jest.Mock).mockReturnValue(Buffer.from('file-data'));
 
       await expect(__testables.zipFileAddDirectory(null, '/root', '/root', false)).resolves.toBeUndefined();
@@ -519,7 +659,12 @@ describe('edits module', () => {
 
     test('creates a zip buffer from symbols directory', async () => {
       (fs.readdirSync as jest.Mock).mockReturnValue(['file1.txt']);
-      (fs.statSync as jest.Mock).mockReturnValue({ isDirectory: () => false });
+      (fs.lstatSync as jest.Mock).mockReturnValue({
+        isDirectory: () => false,
+        isFile: () => true,
+        isSymbolicLink: () => false,
+        size: 9,
+      });
       (fs.readFileSync as jest.Mock).mockReturnValue(Buffer.from('file-data'));
 
       const buffer = await __testables.createDebugSymbolZipFile('/root');
@@ -637,7 +782,12 @@ describe('edits module', () => {
   describe('__testables.uploadReleaseFiles', () => {
     test('uploads apk and aab and collects version codes', async () => {
       (fs.readFileSync as jest.Mock).mockReturnValue('mapping-file');
-      (fs.lstatSync as jest.Mock).mockReturnValue({ isDirectory: () => false });
+      (fs.lstatSync as jest.Mock).mockReturnValue({
+        isDirectory: () => false,
+        isFile: () => true,
+        isSymbolicLink: () => false,
+        size: 1024,
+      });
 
       const releaseOptions = options({
         mappingFile: './mapping.txt',
@@ -680,12 +830,12 @@ describe('edits module', () => {
 
     test('preflights mapping and debug symbols before creating an edit', async () => {
       (fs.accessSync as jest.Mock).mockImplementation((filePath: string) => {
-        if (filePath === './symbols.zip') throw new Error('missing symbols');
+        if (filePath.endsWith('symbols.zip')) throw new Error('missing symbols');
       });
 
       await expect(
         __testables.uploadToPlayStore(options({ mappingFile: './mapping.txt', debugSymbols: './symbols.zip' }), ['one.apk'])
-      ).rejects.toThrow('Unable to read debugSymbols path ./symbols.zip: missing symbols');
+      ).rejects.toThrow('Unable to read debugSymbols file symbols.zip: missing symbols');
       expect(mockAndroidPublisher.edits.insert).not.toHaveBeenCalled();
     });
   });

@@ -8,7 +8,11 @@ import { androidpublisher_v3 } from '@googleapis/androidpublisher';
 import { readFile } from 'fs/promises';
 import * as logger from './utils/logger';
 import { isNotNil } from 'es-toolkit/predicate';
+import { assertPathInsideRoot, resolveSecureDirectory, safeBasenameForLog } from './utils/security-utils';
 import LocalizedText = androidpublisher_v3.Schema$LocalizedText;
+
+const WHATS_NEW_FILE_PATTERN = /^whatsnew-(?<locale>[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?)$/;
+const WHATS_NEW_MAX_BYTES = 128 * 1024;
 
 /**
  * 다국어 릴리스 노트 읽기
@@ -20,28 +24,36 @@ import LocalizedText = androidpublisher_v3.Schema$LocalizedText;
 export async function readLocalizedReleaseNotes(whatsNewDir: string | undefined): Promise<LocalizedText[] | undefined> {
   logger.d(`Executing readLocalizedReleaseNotes`);
   if (isNotNil(whatsNewDir) && whatsNewDir.length > 0) {
+    const whatsNewRoot = resolveSecureDirectory(whatsNewDir, 'whatsNewDirectory');
     // whatsnew-{language} 형식의 파일 찾기
-    const releaseNotes = fs.readdirSync(whatsNewDir).filter(value => /whatsnew-((.*-.*)|(.*))\b/.test(value));
-    const pattern = /whatsnew-(?<local>(.*-.*)|(.*))/;
+    const releaseNotes = fs.readdirSync(whatsNewRoot).filter(value => WHATS_NEW_FILE_PATTERN.test(value));
 
     const localizedReleaseNotes: LocalizedText[] = [];
 
-    logger.d(`Found files: ${releaseNotes.toString()}`);
+    logger.d(`Found ${releaseNotes.length} localized whatsnew files.`);
     for (const value of releaseNotes) {
-      const matches = value.match(pattern);
-      if (isNotNil(matches) && matches.length == 4) {
-        logger.d(`Matches for ${value} = ${matches.toString()}`);
-        const lang = matches[1];
-        const filePath = path.join(whatsNewDir, value);
-        const content = await readFile(filePath, 'utf-8');
+      const matches = value.match(WHATS_NEW_FILE_PATTERN) as RegExpMatchArray & { groups: { locale: string } };
+      const lang = matches.groups.locale;
+      const filePath = path.join(whatsNewRoot, value);
+      const stat = fs.lstatSync(filePath);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`whatsNewDirectory must not contain symbolic links: ${safeBasenameForLog(filePath)}`);
+      }
+      if (!stat.isFile()) {
+        continue;
+      }
+      if (stat.size > WHATS_NEW_MAX_BYTES) {
+        throw new Error(`whatsnew file is too large: ${safeBasenameForLog(filePath)}`);
+      }
+      assertPathInsideRoot(fs.realpathSync(filePath), whatsNewRoot, 'whatsnew file');
+      const content = await readFile(filePath, 'utf-8');
 
-        if (isNotNil(content)) {
-          logger.d(`Found localized 'whatsnew-*-*' for Lang(${lang})`);
-          localizedReleaseNotes.push({
-            language: lang,
-            text: content,
-          });
-        }
+      if (isNotNil(content)) {
+        logger.d(`Found localized 'whatsnew-*-*' for Lang(${lang})`);
+        localizedReleaseNotes.push({
+          language: lang,
+          text: content,
+        });
       }
     }
 
