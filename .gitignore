@@ -99,3 +99,4 @@ typings/
 /__tests__/main.test.js
 /src/whatsnew.js
 /__tests__/whatsnew.test.js
+debug-log.json
