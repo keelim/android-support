@@ -86,7 +86,11 @@ inputs:
     required: false
 outputs:
   internalSharingDownloadUrl:
-    description: "The internal app sharing download url if track was 'internalsharing'"
+    description: 'The last download URL produced for an upload run'
+  internalSharingDownloadUrls:
+    description: 'A JSON array of all download URLs produced for an upload run'
+  dryRun:
+    description: 'Set to true when dry-run upload validation succeeds and the action exits before Play API upload'
   signedReleaseFile:
     description: 'The signed release APK or AAB file, if single'
   signedReleaseFiles:

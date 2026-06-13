@@ -3,7 +3,7 @@
 //
 // Compares three contract surfaces that must stay aligned:
 //   1. action.yml `inputs:` (declared inputs)
-//   2. src/*.ts `getInput('x')` calls (consumed inputs)
+//   2. src/*.ts `getInput('x')` / `getBooleanInput('x')` calls (consumed inputs)
 //   3. README.md input table (documented inputs)
 //
 // Fails (exit 1) ONLY on the dangerous case: an input consumed via getInput()
@@ -27,14 +27,14 @@ function parseActionInputs() {
   return [...body.matchAll(/^ {2}([A-Za-z][A-Za-z0-9_]*):/gm)].map((m) => m[1]);
 }
 
-/** @returns {Set<string>} input names consumed via getInput() in src/ */
+/** @returns {Set<string>} input names consumed via getInput() / getBooleanInput() in src/ */
 function parseConsumedInputs() {
   const srcDir = join(ROOT, 'src');
   const names = new Set();
   for (const ent of readdirSync(srcDir, { withFileTypes: true })) {
     if (!ent.isFile() || !/\.ts$/.test(ent.name)) continue;
     const text = readFileSync(join(srcDir, ent.name), 'utf8');
-    for (const m of text.matchAll(/getInput\(\s*['"]([^'"]+)['"]/g)) names.add(m[1]);
+    for (const m of text.matchAll(/get(?:Boolean)?Input\(\s*['"]([^'"]+)['"]/g)) names.add(m[1]);
   }
   return names;
 }
@@ -43,7 +43,7 @@ function parseConsumedInputs() {
 function parseReadmeInputs(actionInputs) {
   const text = readFileSync(join(ROOT, 'README.md'), 'utf8');
   const documented = new Set();
-  for (const m of text.matchAll(/^\|\s*([A-Za-z][A-Za-z0-9_]*)\s*\|/gm)) {
+  for (const m of text.matchAll(/^\|\s*`?([A-Za-z][A-Za-z0-9_]*)`?\s*\|/gm)) {
     if (actionInputs.includes(m[1])) documented.add(m[1]);
   }
   return documented;
