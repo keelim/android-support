@@ -124,6 +124,7 @@ export async function uploadRun() {
     // 필수 및 선택적 입력값 가져오기
     const serviceAccountJson = optionalInputValue(core.getInput('serviceAccountJson', { required: false }));
     const serviceAccountJsonRaw = optionalInputValue(core.getInput('serviceAccountJsonPlainText', { required: false }));
+    const useApplicationDefaultCredentials = core.getBooleanInput('useApplicationDefaultCredentials', { required: false });
     const packageName = requireInputValue(core.getInput('packageName', { required: false }), 'packageName');
     const releaseFile = optionalInputValue(core.getInput('releaseFile', { required: false }));
     const releaseFilesInput = core.getInput('releaseFiles', { required: false });
@@ -173,7 +174,7 @@ export async function uploadRun() {
 
     // 서비스 계정 JSON 검증
     logger.d('Validating service account JSON.');
-    await validateServiceAccountJson(serviceAccountJsonRaw, serviceAccountJson);
+    await validateServiceAccountJson(serviceAccountJsonRaw, serviceAccountJson, useApplicationDefaultCredentials);
     logger.d('Service account JSON validated.');
 
     // 사용자 분수 검증
@@ -284,10 +285,14 @@ export async function uploadRun() {
  */
 async function validateServiceAccountJson(
   serviceAccountJsonRaw: string | undefined,
-  serviceAccountJson: string | undefined
+  serviceAccountJson: string | undefined,
+  useApplicationDefaultCredentials = false
 ): Promise<void> {
-  if (serviceAccountJson && serviceAccountJsonRaw) {
-    throw new Error("Provide only one of 'serviceAccountJsonPlainText' or 'serviceAccountJson'");
+  const credentialModes = Number(!!serviceAccountJsonRaw) + Number(!!serviceAccountJson) + Number(useApplicationDefaultCredentials);
+  if (credentialModes > 1) {
+    throw new Error(
+      "Provide only one of 'serviceAccountJsonPlainText', 'serviceAccountJson', or 'useApplicationDefaultCredentials'"
+    );
   }
 
   if (serviceAccountJsonRaw) {
@@ -308,9 +313,10 @@ async function validateServiceAccountJson(
     const serviceAccountJsonText = await fs.promises.readFile(serviceAccountFile, 'utf8');
     validateServiceAccountJsonPayload(String(serviceAccountJsonText), 'serviceAccountJson');
     core.exportVariable('GOOGLE_APPLICATION_CREDENTIALS', serviceAccountFile);
-  } else {
-    // 둘 다 제공되지 않은 경우 오류
-    throw new Error("You must provide one of 'serviceAccountJsonPlainText' or 'serviceAccountJson' to use this action");
+  } else if (!useApplicationDefaultCredentials) {
+    throw new Error(
+      "You must provide one of 'serviceAccountJsonPlainText' or 'serviceAccountJson', or set 'useApplicationDefaultCredentials' to true"
+    );
   }
 }
 

@@ -23,6 +23,7 @@ Use these inputs with `type: upload`.
 | `track` | Target track. Use `internalsharing` for internal app sharing, or a Play track such as `internal`, `alpha`, `beta`, or `production`. | Yes |
 | `serviceAccountJsonPlainText` | Raw service account JSON, usually supplied from a secret. The action writes it to a per-run temp file and removes it after upload. | One credential input |
 | `serviceAccountJson` | Path to a service account JSON file under the workspace or runner temp directory. | One credential input |
+| `useApplicationDefaultCredentials` | Set to `true` to use Google Application Default Credentials already configured on the runner, including Workload Identity Federation. Defaults to `false`. | One credential mode |
 | `releaseName` | Optional release name. If omitted, Google Play Console provides the default. | No |
 | `inAppUpdatePriority` | Integer in `[0, 5]`; defaults to `0`. | No |
 | `userFraction` | Staged rollout fraction. Provide it for `inProgress` or `halted`; do not provide it for `completed` or `draft`. | Conditional |
@@ -38,7 +39,7 @@ Use these inputs with `type: upload`.
 | `debugSymbols` | Native debug symbols `.zip` file or directory. Currently uploaded only for APK artifacts; AAB uploads skip this file. | No |
 | `releaseFile` | Deprecated single release file input. Use `releaseFiles`. | No |
 
-Provide exactly one of `serviceAccountJsonPlainText` or `serviceAccountJson`. Providing both fails the action, and providing neither fails upload runs.
+Choose exactly one credential mode: `serviceAccountJsonPlainText`, `serviceAccountJson`, or `useApplicationDefaultCredentials: true`. Mixing modes fails the action; omitting all three also fails upload runs. ADC is opt-in so an unexpectedly credentialed runner cannot silently change the authentication path.
 
 ### Release notes
 
@@ -100,6 +101,23 @@ steps:
     with:
       type: upload
       serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+      packageName: com.example.myapp
+      releaseFiles: app/build/outputs/bundle/release/*.aab
+      track: internal
+      status: completed
+```
+
+### Upload with Application Default Credentials
+
+Configure Application Default Credentials on the runner first, for example with a Google Workload Identity Federation authentication step, then opt in explicitly:
+
+```yaml
+steps:
+  - uses: actions/checkout@v4
+  - uses: keelim/upload-google-play@v0.0.8
+    with:
+      type: upload
+      useApplicationDefaultCredentials: true
       packageName: com.example.myapp
       releaseFiles: app/build/outputs/bundle/release/*.aab
       track: internal

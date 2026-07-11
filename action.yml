@@ -14,6 +14,10 @@ inputs:
   serviceAccountJsonPlainText:
     description: 'The raw json text of the service account private key to authorize the upload request'
     required: false
+  useApplicationDefaultCredentials:
+    description: 'Use Google Application Default Credentials instead of a service account JSON input'
+    default: 'false'
+    required: false
   packageName:
     description: 'The package name, or Application Id, of the app you are uploading'
     required: false

@@ -41,6 +41,8 @@ describe('action runtime contract', () => {
     expect(actionInputBlock('track')).not.toContain('default:');
     expect(actionInputBlock('status')).toContain("default: 'completed'");
     expect(actionInputBlock('inAppUpdatePriority')).toContain("default: '0'");
+    expect(actionInputBlock('useApplicationDefaultCredentials')).toContain("default: 'false'");
+    expect(mainSource()).toContain("core.getBooleanInput('useApplicationDefaultCredentials', { required: false })");
   });
 
   test.each(['dryRun', 'internalSharingDownloadUrls'])('declares runtime output %s in action.yml', outputName => {

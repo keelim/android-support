@@ -419,6 +419,21 @@ describe('main module', () => {
       expect(core.setOutput).toHaveBeenCalledWith('dryRun', 'true');
     });
 
+    test('uses application default credentials only when explicitly enabled', async () => {
+      setInputs({
+        useApplicationDefaultCredentials: 'true',
+        packageName: 'com.app',
+        releaseFiles: './__tests__/releasefiles/release.aab',
+        track: 'production',
+        status: 'completed',
+      });
+
+      await uploadRun();
+
+      expect(runUploadEdit).toHaveBeenCalled();
+      expect(core.exportVariable).not.toHaveBeenCalled();
+    });
+
     test('handles Error in upload flow', async () => {
       setInputs({
         serviceAccountJsonPlainText: VALID_SERVICE_ACCOUNT_JSON,
@@ -504,7 +519,7 @@ describe('main module', () => {
   describe('__testables.validateServiceAccountJson', () => {
     test('rejects when both credential options are present', async () => {
       await expect(__testables.validateServiceAccountJson(VALID_SERVICE_ACCOUNT_JSON, '/tmp/service.json')).rejects.toThrow(
-        "Provide only one of 'serviceAccountJsonPlainText' or 'serviceAccountJson'"
+        "Provide only one of 'serviceAccountJsonPlainText', 'serviceAccountJson', or 'useApplicationDefaultCredentials'"
       );
       expect(writeFile).not.toHaveBeenCalled();
       expect(core.exportVariable).not.toHaveBeenCalled();
@@ -535,7 +550,18 @@ describe('main module', () => {
 
     test('rejects when neither credential source is provided', async () => {
       await expect(__testables.validateServiceAccountJson(undefined, undefined)).rejects.toThrow(
-        "You must provide one of 'serviceAccountJsonPlainText' or 'serviceAccountJson' to use this action"
+        "You must provide one of 'serviceAccountJsonPlainText' or 'serviceAccountJson', or set 'useApplicationDefaultCredentials' to true"
+      );
+    });
+
+    test('accepts explicit application default credentials without exporting a JSON path', async () => {
+      await expect(__testables.validateServiceAccountJson(undefined, undefined, true)).resolves.toBeUndefined();
+      expect(core.exportVariable).not.toHaveBeenCalled();
+    });
+
+    test('rejects application default credentials combined with JSON credentials', async () => {
+      await expect(__testables.validateServiceAccountJson(VALID_SERVICE_ACCOUNT_JSON, undefined, true)).rejects.toThrow(
+        "Provide only one of 'serviceAccountJsonPlainText', 'serviceAccountJson', or 'useApplicationDefaultCredentials'"
       );
     });
   });
